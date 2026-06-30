@@ -113,7 +113,7 @@ src/loader/                       ← Loader 模块目录
 
 #### 核心函数
 
-**声明位置：** [`include/elf_loader.h`](../参考项目结构1/include/elf_loader.h)
+**声明位置：** [`include/elf_loader.h`](../../参考项目结构1/include/elf_loader.h)
 
 ```c
 bool elf_load(const char *filename, PhysicalMemory *pmem, MMUState *mmu,
@@ -129,11 +129,11 @@ bool elf_load(const char *filename, PhysicalMemory *pmem, MMUState *mmu,
 | `stack_top` | **输出** | 栈顶虚拟地址（`0x7FFFF000`），调用者写入 `cpu.regs[REG_SP]` |
 | 返回值 | 输出 | `true` 加载成功，`false` 失败（已打印错误信息） |
 
-**实现位置：** [`src/loader/elf_load.c`](../参考项目结构1/src/loader/elf_load.c)
+**实现位置：** [`src/loader/elf_load.c`](../../参考项目结构1/src/loader/elf_load.c)
 
 #### 模块内部函数
 
-以下函数在 `src/loader/` 内部各文件间共享，声明在 [`loader_internal.h`](../参考项目结构1/src/loader/loader_internal.h)，外部模块不可见：
+以下函数在 `src/loader/` 内部各文件间共享，声明在 [`loader_internal.h`](../../参考项目结构1/src/loader/loader_internal.h)，外部模块不可见：
 
 | 函数 | 实现文件 | 说明 |
 |------|----------|------|
@@ -143,7 +143,7 @@ bool elf_load(const char *filename, PhysicalMemory *pmem, MMUState *mmu,
 
 #### 数据结构
 
-**定义位置：** [`include/elf_loader.h`](../参考项目结构1/include/elf_loader.h)（已定义，不需要重新定义）
+**定义位置：** [`include/elf_loader.h`](../../参考项目结构1/include/elf_loader.h)（已定义，不需要重新定义）
 
 这些结构体只属于 loader 模块，放在 `elf_loader.h` 中。其他模块如果需要知道 `e_entry` 等信息，通过 `elf_load` 的输出参数获取，不需要直接引用这些结构体。
 
@@ -194,7 +194,7 @@ typedef int32_t  Elf32_Sword;   // 32 位有符号字
 
 #### 常量
 
-**所有 ELF 相关常量定义在** [`include/elf_loader.h`](../参考项目结构1/include/elf_loader.h)（已定义）：
+**所有 ELF 相关常量定义在** [`include/elf_loader.h`](../../参考项目结构1/include/elf_loader.h)（已定义）：
 
 ```c
 #define EI_NIDENT    16        // e_ident 数组长度
