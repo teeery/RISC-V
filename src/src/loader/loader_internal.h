@@ -44,7 +44,11 @@
  *   - memory/mmu.h      (MMUState, mmu_*)
  *   - stdint.h, stdbool.h, stdio.h
  *   - ELF 类型 / 常量 / 结构体
+ *
+ * stdio.h 也在这里引入——FILE 类型（声明 elf_load_segment 需要）、
+ * fprintf/stderr（各 .c 文件打印错误用）都依赖它。
  */
+#include <stdio.h>
 #include "loader/elf_loader.h"
 
 /* ═══════════════════════════════════════════════════════════════

@@ -2,8 +2,8 @@
 #define ELF_LOADER_H
 
 #include "types.h"
-#include "memory.h"
-#include "mmu.h"
+#include "memory/memory.h"
+#include "memory/mmu.h"
 
 /* ============================================================
  * elf_loader.h — ELF32/ELF64 文件解析与加载器
@@ -45,11 +45,44 @@ typedef uint16_t Elf32_Half;
 typedef uint32_t Elf32_Word;
 typedef int32_t  Elf32_Sword;
 
+/* e_ident 字段索引 */
+#define EI_MAG0      0
+#define EI_MAG1      1
+#define EI_MAG2      2
+#define EI_MAG3      3
+#define EI_CLASS     4          // 1=32bit, 2=64bit
+#define EI_DATA      5          // 1=小端, 2=大端
+#define EI_VERSION   6
+#define EI_PAD       7
 #define EI_NIDENT    16
-#define EM_RISCV     243       // RISC-V 机器码
-#define ET_EXEC      2         // 可执行文件
-#define PT_LOAD      1         // 可加载段
+
+/* EI_CLASS 取值 */
+#define ELFCLASS32   1
+#define ELFCLASS64   2
+
+/* EI_DATA 取值 */
+#define ELFDATA2LSB  1
+#define ELFDATA2MSB  2
+
+/* e_type 取值 */
+#define ET_NONE      0
+#define ET_REL       1          // 可重定位文件 (.o)
+#define ET_EXEC      2          // 可执行文件
+#define ET_DYN       3          // 共享库 (.so)
+
+/* e_machine 取值 */
+#define EM_RISCV     243        // RISC-V
+
+/* Program Header p_type 取值 */
+#define PT_NULL      0
+#define PT_LOAD      1          // 可加载段
+#define PT_DYNAMIC   2
+#define PT_INTERP    3
+#define PT_NOTE      4
+#define PT_PHDR      6
 #define PT_GNU_STACK 0x6474e551
+
+/* p_flags 权限位 */
 #define PF_X         1
 #define PF_W         2
 #define PF_R         4
