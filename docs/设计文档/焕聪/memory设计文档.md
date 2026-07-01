@@ -157,7 +157,7 @@ typedef struct {
 #### 3.1.2 函数接口
 
 ```c
-// ==================== PhysicalMemory 层 (9 个) ====================
+// ==================== PhysicalMemory 层 (13 个) ====================
 
 void     mem_init(PhysicalMemory *pmem, uint32_t size);
 void     mem_destroy(PhysicalMemory *pmem);
@@ -178,7 +178,7 @@ bool     mem_load(PhysicalMemory *pmem, uint32_t addr, const uint8_t *data,
                   uint32_t size);
 void     mem_dump(PhysicalMemory *pmem, uint32_t addr, uint32_t len);
 
-// ==================== MMU 层 (7 个) ====================
+// ==================== MMU 层 (11 个) ====================
 
 void     mmu_init(MMUState *mmu);
 bool     mmu_translate(MMUState *mmu, uint32_t vaddr, uint32_t *paddr,
@@ -186,17 +186,17 @@ bool     mmu_translate(MMUState *mmu, uint32_t vaddr, uint32_t *paddr,
                        ExceptionType *exc);
 
 bool     mmu_read_8 (MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                     uint8_t *val, PrivilegeLevel priv);
+                     uint8_t *val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_read_16(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                     uint16_t *val, PrivilegeLevel priv);
+                     uint16_t *val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_read_32(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                     uint32_t *val, PrivilegeLevel priv);
+                     uint32_t *val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_write_8 (MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                      uint8_t val, PrivilegeLevel priv);
+                      uint8_t val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_write_16(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                      uint16_t val, PrivilegeLevel priv);
+                      uint16_t val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_write_32(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                      uint32_t val, PrivilegeLevel priv);
+                      uint32_t val, PrivilegeLevel priv, ExceptionType *exc);
 
 bool     mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
                       uint8_t flags);
@@ -313,9 +313,32 @@ PTE 格式（32 位）：
 
 ```
 1. 调用 mmu_translate(vaddr, ..., &paddr, &exc)
-2. 如果翻译失败 (返回 false) → 返回 false，exc 携带异常类型
-3. 调用 mem_read/write_*(pmem, paddr, ...) 完成物理内存访问
+2. 如果翻译失败 (返回 false):
+   → *exc 携带具体异常类型（EXC_LOAD_ACCESS_FAULT / EXC_STORE_ACCESS_FAULT 等）
+   → 函数返回 false，调用者（CPU）根据 *exc 写 mcause/mtval 并跳转 mtvec
+3. 如果翻译成功:
+   → 调用 mem_read/write_*(pmem, paddr, ...) 完成物理内存访问
+   → *exc = EXC_NONE（无异常）
+   → 返回 mem_* 的结果
 ```
+
+> **ExceptionType *exc 的语义**：`exc` 是输出参数，调用者传入 `&exc` 的地址。成功时写 `EXC_NONE`，失败时写具体异常码。PhysicalMemory 层的 `mem_*` 函数不设 exc（只返回 bool），异常类型由 MMU 层统一填充。可用的异常码参见 `types.h`（`EXC_LOAD_ACCESS_FAULT`、`EXC_STORE_ACCESS_FAULT`、`EXC_LOAD_ADDR_MISALIGNED` 等）。
+
+#### 3.2.7b mmu_read / mmu_write（批量）— 批量虚拟地址读写
+
+```
+mmu_read(mmu, pmem, vaddr, buf, len, priv, exc):
+  for i = 0 .. len-1:
+    if (!mmu_read_8(mmu, pmem, vaddr + i, &buf[i], priv, exc))
+      return false;   // *exc 携带第一个失败字节的异常类型
+  *exc = EXC_NONE;
+  return true;
+
+mmu_write(mmu, pmem, vaddr, buf, len, priv, exc):
+  同上，逐字节调用 mmu_write_8
+```
+
+> **使用场景**：`sys_write(fd, buf, len)` 需要从用户虚拟地址 `buf` 连续读 `len` 字节 → 调用 `mmu_read`；`sys_read` 同理调用 `mmu_write`。简单实现逐字节循环；后续可优化为检测连续物理页后直接 `memcpy`。
 
 #### 3.2.8 mmu_map_page — 页表映射
 
