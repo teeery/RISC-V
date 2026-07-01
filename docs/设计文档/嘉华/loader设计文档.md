@@ -77,17 +77,15 @@ C 源码 → 汇编 → 机器码 → ELF 文件 → ★ Loader → 物理内存
 ### 3.0 文件规划（重要：头文件与实现分离，模块内部解耦）
 
 ```
-include/elf_loader.h              ← 对外头文件：类型、常量、elf_load() 声明
+src/include/elf_loader.h          ← 对外头文件：类型、常量、elf_load() 声明
 
-src/loader/                       ← Loader 模块目录
+src/src/loader/                   ← Loader 模块目录
   ├── loader_internal.h           ← 内部头文件：各 .c 间共享的函数声明和常量
   ├── elf_validate.c              ← ELF Header 校验（纯逻辑，无副作用）
   ├── elf_segment.c               ← 段加载（权限转换、数据搬运、.bss 清零）
   ├── elf_load.c                  ← 主入口（编排调度其它文件）
   └── elf_stack.c                 ← 栈初始化（栈分配、auxv 布局）
 ```
-
-> 文件位于 `docs/参考项目结构1/` 下，即 `docs/参考项目结构1/include/elf_loader.h` 和 `docs/参考项目结构1/src/loader/`。
 
 **设计原则：**
 
@@ -113,7 +111,7 @@ src/loader/                       ← Loader 模块目录
 
 #### 核心函数
 
-**声明位置：** [`include/elf_loader.h`](../../参考项目结构1/include/elf_loader.h)
+**声明位置：** [`include/elf_loader.h`](../../src/include/elf_loader.h)
 
 ```c
 bool elf_load(const char *filename, PhysicalMemory *pmem, MMUState *mmu,
@@ -129,11 +127,11 @@ bool elf_load(const char *filename, PhysicalMemory *pmem, MMUState *mmu,
 | `stack_top` | **输出** | 栈顶虚拟地址（`0xC0000000`），调用者写入 `cpu.regs[REG_SP]` |
 | 返回值 | 输出 | `true` 加载成功，`false` 失败（已打印错误信息） |
 
-**实现位置：** [`src/loader/elf_load.c`](../../参考项目结构1/src/loader/elf_load.c)
+**实现位置：** [`src/loader/elf_load.c`](../../src/src/loader/elf_load.c)
 
 #### 模块内部函数
 
-以下函数在 `src/loader/` 内部各文件间共享，声明在 [`loader_internal.h`](../../参考项目结构1/src/loader/loader_internal.h)，外部模块不可见：
+以下函数在 `src/loader/` 内部各文件间共享，声明在 [`loader_internal.h`](../../src/src/loader/loader_internal.h)，外部模块不可见：
 
 | 函数 | 实现文件 | 说明 |
 |------|----------|------|
@@ -143,7 +141,7 @@ bool elf_load(const char *filename, PhysicalMemory *pmem, MMUState *mmu,
 
 #### 数据结构
 
-**定义位置：** [`include/elf_loader.h`](../../参考项目结构1/include/elf_loader.h)（已定义，不需要重新定义）
+**定义位置：** [`include/elf_loader.h`](../../src/include/elf_loader.h)（已定义，不需要重新定义）
 
 这些结构体只属于 loader 模块，放在 `elf_loader.h` 中。其他模块如果需要知道 `e_entry` 等信息，通过 `elf_load` 的输出参数获取，不需要直接引用这些结构体。
 
@@ -194,7 +192,7 @@ typedef int32_t  Elf32_Sword;   // 32 位有符号字
 
 #### 常量
 
-**所有 ELF 相关常量定义在** [`include/elf_loader.h`](../../参考项目结构1/include/elf_loader.h)（已定义）：
+**所有 ELF 相关常量定义在** [`include/elf_loader.h`](../../src/include/elf_loader.h)（已定义）：
 
 ```c
 #define EI_NIDENT    16        // e_ident 数组长度
@@ -206,7 +204,7 @@ typedef int32_t  Elf32_Sword;   // 32 位有符号字
 #define PF_R         4         // 可读
 ```
 
-栈常量（在 `src/loader/loader_internal.h` 中定义）：
+栈常量（在 `src/src/loader/loader_internal.h` 中定义）：
 ```c
 #define STACK_TOP_DEFAULT   0xC0000000      // 栈顶，和团队结论7一致
 #define STACK_SIZE_DEFAULT  (256 * 1024)     // 256KB (0x40000)，栈范围 0xBFFC0000 ~ 0xC0000000
@@ -248,7 +246,8 @@ elf_load(filename, pmem, mmu, entry, stack_top)
 │
 ├─ 7. elf_setup_stack(pmem, stack_top) ← ★ 已实现（elf_stack.c）
 │     ├─ mem_map(pmem, base, 256KB, RW, "stack")
-│     └─ *stack_top = STACK_TOP_DEFAULT
+│     │   其中 base = 0xC0000000 - 256KB = 0xBFFC0000
+│     └─ *stack_top = 0xC0000000
 │
 └─ 8. printf 加载信息, return true   ← ★ 已实现
 ```
@@ -272,14 +271,18 @@ elf_load_segment(fp, phdr, pmem, mmu)
 │  if (phdr->p_flags & PF_X) flags |= MEM_EXEC
 │  mem_map(pmem, paddr, phdr->p_memsz, flags, "segment")
 │
-│  // 从文件拷贝数据
+│  // 从文件拷贝数据（通过 memory 接口）
+│  buf = malloc(phdr->p_filesz)
 │  fseek(fp, phdr->p_offset, SEEK_SET)
-│  fread(pmem->data + paddr, 1, phdr->p_filesz, fp)
+│  fread(buf, 1, phdr->p_filesz, fp)
+│  mem_load(pmem, paddr, buf, phdr->p_filesz)  ← 对齐焕聪 memory 接口
+│  free(buf)
 │
 │  // .bss 清零
 │  if (phdr->p_memsz > phdr->p_filesz):
-│    memset(pmem->data + paddr + phdr->p_filesz, 0,
-│           phdr->p_memsz - phdr->p_filesz)
+│    zero_buf = calloc(1, bss_size)
+│    mem_load(pmem, paddr + filesz, zero_buf, bss_size)
+│    free(zero_buf)
 │
 │  // ============ TODO：完善版应该做的事 ============
 │  // 1. 用 mem_find_free(pmem, p_memsz, p_align) 在物理内存中找空闲区域
@@ -308,12 +311,14 @@ elf_load_segment(fp, phdr, pmem, mmu)
 
 #### 关键设计决策
 
-**为什么直接写 `pmem->data[]` 而不是调用 `mmu_write`？**
-参考项目结构1 的架构是 Loader 直接操作物理内存。MMU 的读写接口（`mmu_read_32` 等）是给 CPU 用的——CPU 只知道虚拟地址。但 Loader 在加载阶段拥有全局视角，直接写物理内存更高效，绕开了"还没映射就要翻译"的鸡生蛋问题。
-等完善版用 `mmu_map_page` 建立映射后，CPU 就能通过虚拟地址访问到 Loader 写入的数据。
+**为什么用 `mem_load()` 而不是直接写 `pmem->data[]`？**
+对齐焕聪 memory 模块接口。`mem_load(pmem, addr, buf, size)` 是 PhysicalMemory 层提供的批量数据加载接口，Loader 只需把文件数据读到临时缓冲区再传入即可。这保证 Loader 不绕过 memory 模块直接操作内部数据结构（`data[]` 数组），接口更干净。
 
-**为什么文件读写直接用 `fread` 不用 4KB 缓冲区？**
-`fread(pmem->data + paddr, 1, p_filesz, fp)` 一次读完整个段，简单直接。C 标准库的 `fread` 内部已经做了缓冲，不需要我们再做一层。段的 `p_filesz` 通常只有几十 KB，不会造成栈溢出。
+**为什么用 `malloc` 临时缓冲区 + `mem_load` 的组合？**
+1. `malloc(phdr->p_filesz)` 分配临时缓冲区 → `fread` 读文件 → `mem_load(pmem, ...)` 写入物理内存
+2. 不直接在栈上开大数组，避免段过大时栈溢出
+3. 通过 `mem_load` 接口写入，不直接操作 `pmem->data[]`，保持模块边界清晰
+4. 加载完成后 `free`，内存峰值 = 最大段大小（通常 < 1MB）
 
 **为什么栈放在 `0xC0000000`？**
 这是团队讨论结论（结论 7），和参考项目 2 一致。`0xC0000000` 接近 3GB 位置，更接近真实 Linux 用户空间布局。栈向下增长 256KB，范围 `0xBFFC0000` ~ `0xC0000000`。
@@ -419,9 +424,9 @@ main.c
 ### 文件清单
 
 ```
-include/elf_loader.h              ← 对外头文件：Elf32_Ehdr/Phdr、常量、elf_load() 声明
+src/include/elf_loader.h          ← 对外头文件：Elf32_Ehdr/Phdr、常量、elf_load() 声明
 
-src/loader/
+src/src/loader/
   ├── loader_internal.h           ← 内部头文件：各 .c 间共享的函数声明
   ├── elf_validate.c              ← ELF Header 校验（✓ 已实现）
   ├── elf_segment.c               ← 段加载（⚠ 简化版，恒等映射）
