@@ -43,8 +43,32 @@
  * ============================================================
  */
 
+#define PAGE_SIZE        4096
+#define PAGE_SHIFT       12
 #define VPN0_SHIFT       12
 #define VPN1_SHIFT       22
+
+/* PTE 标志位（与 RISC-V 规范一致） */
+#define PTE_VALID        (1 << 0)
+#define PTE_READ         (1 << 1)
+#define PTE_WRITE        (1 << 2)
+#define PTE_EXEC         (1 << 3)
+#define PTE_USER         (1 << 4)
+#define PTE_GLOBAL       (1 << 5)
+#define PTE_ACCESSED     (1 << 6)
+#define PTE_DIRTY        (1 << 7)
+
+#define SATP_MODE_OFF    0   // Bare：无地址翻译
+#define SATP_MODE_SV32   1   // Sv32：两级页表
+
+/* MEM_* → PTE_* 权限转换（mmu.h 能同时看到 memory.h 的 MEM_* 和自己的 PTE_*） */
+static inline uint8_t mem_perm_to_pte_flags(uint8_t mem_flags) {
+    uint8_t pte = PTE_VALID;
+    if (mem_flags & MEM_READ)  pte |= PTE_READ;
+    if (mem_flags & MEM_WRITE) pte |= PTE_WRITE;
+    if (mem_flags & MEM_EXEC)  pte |= PTE_EXEC;
+    return pte;
+}
 
 /* MMU 状态 */
 typedef struct {
