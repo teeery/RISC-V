@@ -10,8 +10,8 @@
 #define LOADER_INTERNAL_H
 
 #include "elf_loader.h"
-#include "memory.h"
-#include "mmu.h"
+#include "memory/memory.h"
+#include "memory/mmu.h"
 
 /* ---- 常量 ---- */
 #define STACK_TOP_DEFAULT   0xC0000000       // 对齐焕聪 memory 设计
