@@ -113,73 +113,133 @@ Debugger 提供一个交互式命令行界面（REPL），提示符为 `(rvsim) 
 
 ### 3.1 数据结构与对外接口
 
-#### 3.1.1 使用 Simulator 中已定义的 Breakpoint（不重复定义）
+#### 3.1.1 类型依赖链（Debugger 不重复定义任何结构体，全部引用已有定义）
 
-`Breakpoint` 和 `Simulator` 结构体定义在 `src/include/simulator.h`，见 `docs/设计文档/共同部分/公共类型定义.md`：
+Debugger 模块**不定义任何自己的数据结构体**。所有状态通过 `Simulator*` 指针访问，类型定义分布在以下几个已对齐的头文件中。理解这条依赖链是 Debugger 实现的基础：
 
-```c
-// ========== simulator.h（李特/焕聪 负责）==========
-
-typedef struct {
-    uint32_t addr;              // 断点地址
-    uint32_t original_insn;     // 被替换前的原始指令（用于恢复）
-    bool     enabled;           // 是否启用
-} Breakpoint;
-
-typedef struct {
-    CPU             cpu;           // CPU 状态           → 李特
-    MMUState        mmu;           // MMU 页表/satp      → 焕聪
-    PhysicalMemory  pmem;          // 物理内存            → 焕聪
-
-    // 调试相关
-    Breakpoint     *breakpoints;   // 断点数组（动态分配，Debugger 管理）
-    int             bp_count;      // 当前断点数量
-    int             bp_capacity;   // 断点数组容量
-    bool            single_step;   // 单步执行标志
-    bool            debug_mode;    // 调试模式（Debugger 接管时设为 true）
-
-    // 统计
-    uint64_t        inst_count;    // 已执行指令数
-    uint64_t        cycle_count;   // 周期计数
-} Simulator;
+```
+types.h                         ← 零依赖，基础枚举和宏
+  │
+  ├── PrivilegeLevel            ← { PRIV_USER=0, PRIV_SUPERVISOR=1, PRIV_MACHINE=3 }
+  ├── ExceptionType             ← { EXC_NONE=0, EXC_BREAKPOINT=4, EXC_ECALL_M=11, ... }
+  ├── MEM_READ/WRITE/EXEC       ← 内存权限标志（物理内存层用）
+  ├── PAGE_SIZE=4096            ← 页大小常量
+  └── PTE_VALID/READ/WRITE/...  ← PTE 权限标志（MMU 页表层用）
+      │
+      ├── memory.h              ← PhysicalMemory 结构体（焕聪）
+      │     └── PhysicalMemory { uint8_t *data; uint32_t size; ... }
+      │
+      ├── mmu.h                 ← MMUState 结构体（焕聪）
+      │     └── MMUState { uint32_t satp; uint32_t *root_page_table; bool enabled; }
+      │
+      ├── cpu.h                 ← CPU 结构体（李特）
+      │     └── CPU { uint32_t regs[32]; uint32_t pc; bool running;
+      │               PrivilegeLevel priv; uint32_t mstatus; uint32_t mtvec;
+      │               uint32_t mepc; uint32_t mcause; uint32_t mtval; }
+      │
+      └── simulator.h           ← Simulator + Breakpoint（顶层聚合）
+            │
+            ├── Breakpoint { uint32_t addr; uint32_t original_insn; bool enabled; }
+            └── Simulator { CPU cpu; MMUState mmu; PhysicalMemory pmem;
+                            Breakpoint *breakpoints; int bp_count; int bp_capacity;
+                            bool single_step; bool debug_mode;
+                            uint64_t inst_count; uint64_t cycle_count; }
+                  │
+                  └── debugger.h    ← Debugger 函数声明（只依赖 Simulator 前置声明）
 ```
 
-**说明：**
-- 断点通过数组下标作为编号（第 0 个断点就是 `breakpoints[0]`，`info breakpoints` 显示为 "0"）
-- `bp_capacity` 是当前动态数组容量，初始为 16，满后 `realloc` 扩容 2 倍
-- Debugger 通过 `Simulator*` 操作断点数组，对外接口不再需要单独的 `DebuggerState`
+**各类型 Debugger 访问方式（通过 `Simulator* sim` 指针）：**
 
-#### 3.1.2 Debugger 模块的函数接口
+| 类型 | 定义位置 | Debugger 中通过 | 用途 |
+|------|---------|----------------|------|
+| `Breakpoint` | `simulator.h` | `sim->breakpoints[i]` | 断点增删查，每个字段含义见下 |
+| `Simulator` | `simulator.h` | `sim->` | 顶层入口，聚合所有模块状态 |
+| `CPU` | `cpu.h` | `sim->cpu.regs[]`, `sim->cpu.pc`, `sim->cpu.running`, `sim->cpu.priv`, `sim->cpu.mstatus`, `sim->cpu.mcause`, `sim->cpu.mepc` | 寄存器查看、执行控制、栈回溯 |
+| `MMUState` | `mmu.h` | `&sim->mmu`（传给 `mmu_read/write_32`） | x 命令读内存、断点指令读写 |
+| `PhysicalMemory` | `memory.h` | `&sim->pmem`（传给 `mmu_read/write_32` 或 `mem_dump`） | x 命令物理内存 dump |
+| `PrivilegeLevel` | `types.h` | `sim->cpu.priv`（传给 `mmu_read/write_32`） | MMU 权限检查 |
+| `ExceptionType` | `types.h` | 局部变量 `exc`（传给 `mmu_read/write_32`） | 捕获 MMU 错误 |
+
+**`Breakpoint` 字段说明：**
+
+| 字段 | 类型 | Debugger 如何操作 |
+|------|------|-----------------|
+| `addr` | `uint32_t` | 设断点时赋值；删除/命中时比对 PC；退出时恢复原始指令 |
+| `original_insn` | `uint32_t` | 设断点时通过 `mmu_read_32` 读取并保存；命中后恢复时通过 `mmu_write_32` 写回 |
+| `enabled` | `bool` | 设断点时设为 `true`；`info breakpoints` 显示 "y/n" |
+
+**`Simulator` 中 Debugger 相关的字段：**
+
+| 字段 | 类型 | Debugger 如何操作 |
+|------|------|-----------------|
+| `breakpoints` | `Breakpoint*` | 动态数组指针；设断点时通过下标写入，满时 `realloc` 扩容 |
+| `bp_count` | `int` | 设断点时 `++`，删断点时 `--`（将末尾元素移到被删位置） |
+| `bp_capacity` | `int` | 初始值由 `sim_init()` 设为 16；满时 ×2 扩容 |
+| `single_step` | `bool` | `debugger_step()` 中设为 `true`；`sim_step()` 读它决定是否只执行一条 |
+| `debug_mode` | `bool` | `debugger_run()` 入口设为 `true`；`quit` 时设为 `false` |
+
+**断点数组管理约定：**
+- 下标即编号：第 0 个断点 = `breakpoints[0]`，`info breakpoints` 显示 "0"
+- 删除策略：将末尾元素移到被删位置（O(1)），`bp_count--`；不保留空洞
+- 扩容策略：`bp_count >= bp_capacity` 时 `realloc` 扩容 2 倍，初始容量 16
+- 退出清理：`quit` 时遍历恢复所有原始指令，`free(sim->breakpoints)` 在 `sim_destroy()` 中统一完成
+
+#### 3.1.2 Debugger 自身的头文件（`src/include/debugger/debugger.h`）
 
 ```c
-// ========== debugger.h ==========
-// 头文件位置：src/include/debugger/debugger.h
+#ifndef DEBUGGER_H
+#define DEBUGGER_H
 
-#include "types.h"
+#include "types.h"        // PrivilegeLevel, ExceptionType
 
-struct Simulator;  // 前置声明
+struct Simulator;          // 前置声明（避免循环依赖，实现文件中再 #include "simulator.h"）
 
-/* 启动调试 REPL 主循环（阻塞，直到用户 quit） */
+/* ========== REPL 入口 ========== */
+
+/* 启动调试 REPL 主循环（阻塞，直到用户 quit 或程序正常退出） */
 void debugger_run(struct Simulator *sim);
 
-/* ── 以下为内部函数，供 main.c / sim_step 等位置调用 ── */
+/* ========== 断点管理（操作 sim->breakpoints[]）========== */
 
-/* 断点管理（操作 sim->breakpoints[]） */
+/* 在 addr 处设置软件断点，返回下标（也是编号），失败返回 -1 */
 int  debugger_add_breakpoint(struct Simulator *sim, uint32_t addr);
+
+/* 删除指定下标的断点，返回 true 成功 */
 bool debugger_del_breakpoint(struct Simulator *sim, int index);
+
+/* 列出所有断点（info breakpoints） */
 void debugger_list_breakpoints(const struct Simulator *sim);
+
+/* 检查 pc 是否命中某个启用的断点（CPU 在 ebreak 时调用） */
 bool debugger_check_breakpoint(struct Simulator *sim, uint32_t pc);
 
-/* 执行控制 */
-void debugger_step(struct Simulator *sim);       // 单步一条指令
-void debugger_continue(struct Simulator *sim);    // 继续执行到断点或退出
+/* ========== 执行控制 ========== */
 
-/* 状态查看 */
+/* 单步执行一条指令，自动处理断点恢复/重新插入 */
+void debugger_step(struct Simulator *sim);
+
+/* 继续执行，直到命中断点或程序退出（内部循环调 sim_step） */
+void debugger_continue(struct Simulator *sim);
+
+/* ========== 状态查看 ========== */
+
+/* 打印全部 32 个通用寄存器 + PC + 关键 CSR */
 void debugger_print_registers(const struct Simulator *sim);
+
+/* 查看虚拟地址内存内容（hexdump 风格，通过 mmu_read_*） */
 void debugger_examine_memory(struct Simulator *sim, uint32_t vaddr,
                              int count, char format, char unit);
+
+/* 打印调用栈（帧指针链回溯，通过 mmu_read_32 读栈帧） */
 void debugger_print_backtrace(struct Simulator *sim);
+
+#endif /* DEBUGGER_H */
 ```
+
+**关键设计决策：Debugger 不需要 `DebuggerState` 结构体。**
+- 所有状态已经从 `Simulator` 中获取：断点数组、单步标志、调试模式标志
+- REPL 循环只需一个局部 `bool running` 变量（或用 `sim->debug_mode` 控制循环）
+- 这样 CPU 和 Debugger 共享同一份断点数据，无需同步，不存在"谁的版本更新"的问题
 
 ### 3.2 内部实现思路
 
