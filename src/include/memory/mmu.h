@@ -1,8 +1,8 @@
 #ifndef MMU_H
 #define MMU_H
 
-#include "types.h"
 #include "memory.h"
+#include "types.h"
 
 /* ============================================================
  * mmu.h — 虚拟内存管理单元接口（MMU 层）
