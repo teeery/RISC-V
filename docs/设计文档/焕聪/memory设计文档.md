@@ -1,5 +1,13 @@
 # memory 设计文档
 
+> 作者：焕聪 | 最后更新：2026-07-01
+> 
+> **架构决策已确定**：采用两层架构（PhysicalMemory + MMUState）。
+> 公共类型定义见 `docs/设计文档/共同部分/公共类型定义.md`，讨论结论见 `讨论清单.md`。
+> 
+> 接口签名已全员对齐：返回值 `bool`，错误通过 `ExceptionType*` 输出参数传递，
+> CPU 只调 MMU 层（不直接调 `mem_*`），Loader 调两层。
+
 ## 1. 是什么（模块定位）
 
 memory 子系统是 RISC-V 模拟器的**存储基石**——它在宿主机的堆内存中模拟出一块 "假内存"，让被模拟的 RISC-V 程序以为自己运行在真实的物理内存之上。
@@ -90,7 +98,7 @@ RISC-V 程序眼中的虚拟地址空间（32位）：
            │  （空闲空间）
            │     ↑↑↑
            │
-0xBFFF0000 ├────────── 栈（向下增长）  R+W    ← Region[2]
+0xBFFC0000 ├────────── 栈（向下增长）  R+W    ← Region[2]
 0xC0000000 └────────── 栈顶 (初始 sp)
 ═══════════════════════════════════════════════
 ```
@@ -198,9 +206,16 @@ bool     mmu_write_16(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
 bool     mmu_write_32(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
                       uint32_t val, PrivilegeLevel priv, ExceptionType *exc);
 
+bool     mmu_read (MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
+                   uint8_t *buf, uint32_t len, PrivilegeLevel priv, ExceptionType *exc);
+bool     mmu_write(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
+                   const uint8_t *buf, uint32_t len, PrivilegeLevel priv, ExceptionType *exc);
+
 bool     mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
                       uint8_t flags);
 ```
+
+> **注意**：批量读写 `mmu_read` / `mmu_write` 是会议决定新增的接口，用于 syscall `write`/`read` 场景——从虚拟地址连续读取/写入 `len` 字节。内部实现逐字节调用 `mmu_read_8` / `mmu_write_8`，或优化为按页批量 `memcpy`。
 
 ### 3.2 内部实现思路
 
@@ -379,7 +394,7 @@ main()
   │   ├─ 遍历 Program Headers (PT_LOAD):
   │   │   ├─ mem_map(&pmem, vaddr, memsz, flags, name)  ← 注册区域
   │   │   └─ mem_load(&pmem, vaddr, data, filesz)       ← 拷贝段数据
-  │   └─ mem_map(&pmem, 0xBFFF0000, 64KB, R|W, "stack") ← 设置栈区域
+  │   └─ mem_map(&pmem, 0xBFFC0000, 0x40000, MEM_READ | MEM_WRITE, "stack") ← 设置栈区域（256KB）
   │
   ├─ cpu.pc = elf_entry
   └─ cpu.regs[sp] = 栈顶
