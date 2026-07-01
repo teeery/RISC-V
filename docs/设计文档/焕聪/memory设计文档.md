@@ -1,5 +1,13 @@
 # memory 设计文档
 
+> 作者：焕聪 | 最后更新：2026-07-01
+> 
+> **架构决策已确定**：采用两层架构（PhysicalMemory + MMUState）。
+> 公共类型定义见 `docs/设计文档/共同部分/公共类型定义.md`，讨论结论见 `讨论清单.md`。
+> 
+> 接口签名已全员对齐：返回值 `bool`，错误通过 `ExceptionType*` 输出参数传递，
+> CPU 只调 MMU 层（不直接调 `mem_*`），Loader 调两层。
+
 ## 1. 是什么（模块定位）
 
 memory 子系统是 RISC-V 模拟器的**存储基石**——它在宿主机的堆内存中模拟出一块 "假内存"，让被模拟的 RISC-V 程序以为自己运行在真实的物理内存之上。
@@ -90,7 +98,7 @@ RISC-V 程序眼中的虚拟地址空间（32位）：
            │  （空闲空间）
            │     ↑↑↑
            │
-0xBFFF0000 ├────────── 栈（向下增长）  R+W    ← Region[2]
+0xBFFC0000 ├────────── 栈（向下增长）  R+W    ← Region[2]
 0xC0000000 └────────── 栈顶 (初始 sp)
 ═══════════════════════════════════════════════
 ```
@@ -157,7 +165,7 @@ typedef struct {
 #### 3.1.2 函数接口
 
 ```c
-// ==================== PhysicalMemory 层 (9 个) ====================
+// ==================== PhysicalMemory 层 (13 个) ====================
 
 void     mem_init(PhysicalMemory *pmem, uint32_t size);
 void     mem_destroy(PhysicalMemory *pmem);
@@ -178,7 +186,7 @@ bool     mem_load(PhysicalMemory *pmem, uint32_t addr, const uint8_t *data,
                   uint32_t size);
 void     mem_dump(PhysicalMemory *pmem, uint32_t addr, uint32_t len);
 
-// ==================== MMU 层 (7 个) ====================
+// ==================== MMU 层 (12 个) ====================
 
 void     mmu_init(MMUState *mmu);
 bool     mmu_translate(MMUState *mmu, uint32_t vaddr, uint32_t *paddr,
@@ -186,21 +194,32 @@ bool     mmu_translate(MMUState *mmu, uint32_t vaddr, uint32_t *paddr,
                        ExceptionType *exc);
 
 bool     mmu_read_8 (MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                     uint8_t *val, PrivilegeLevel priv);
+                     uint8_t *val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_read_16(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                     uint16_t *val, PrivilegeLevel priv);
+                     uint16_t *val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_read_32(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                     uint32_t *val, PrivilegeLevel priv);
+                     uint32_t *val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_write_8 (MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                      uint8_t val, PrivilegeLevel priv);
+                      uint8_t val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_write_16(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                      uint16_t val, PrivilegeLevel priv);
+                      uint16_t val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_write_32(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                      uint32_t val, PrivilegeLevel priv);
+                      uint32_t val, PrivilegeLevel priv, ExceptionType *exc);
+
+bool     mmu_read (MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
+                   uint8_t *buf, uint32_t len, PrivilegeLevel priv, ExceptionType *exc);
+bool     mmu_write(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
+                   const uint8_t *buf, uint32_t len, PrivilegeLevel priv, ExceptionType *exc);
 
 bool     mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
                       uint8_t flags);
+
+// 堆管理包装 —— CPU 只调 mmu_*，brk 也通过 MMU 层间接调用 mem_brk
+uint32_t mmu_brk(MMUState *mmu, PhysicalMemory *pmem, uint32_t new_brk);
 ```
+
+> **注意**：
+> - 批量读写 `mmu_read` / `mmu_write` 是会议决定新增的接口，用于 syscall `write`/`read` 场景——从虚拟地址连续读取/写入 `len` 字节。内部实现逐字节调用 `mmu_read_8` / `mmu_write_8`，或优化为按页批量 `memcpy`。
 
 ### 3.2 内部实现思路
 
@@ -284,7 +303,7 @@ Sv32 虚拟地址结构:
   │    ├─ V=0 → 页错误                  │
   │    └─ V=1 → 继续                    │
   │ 4. 检查 PDE 是否为叶子节点           │
-  │    ├─ R|W|X != 0 → 可能是 4MB 大页   │
+  │    ├─ R|W|X != 0 → 非规范页表（第一版报页错误，不支持大页）│
   │    └─ R=W=X=0 → 非叶子，指向二级页表  │
   │ 5. 提取 VPN[0] = vaddr[21:12]       │
   │ 6. 读第二级页表: PTE = l2_table[VPN[0]] │
@@ -313,9 +332,32 @@ PTE 格式（32 位）：
 
 ```
 1. 调用 mmu_translate(vaddr, ..., &paddr, &exc)
-2. 如果翻译失败 (返回 false) → 返回 false，exc 携带异常类型
-3. 调用 mem_read/write_*(pmem, paddr, ...) 完成物理内存访问
+2. 如果翻译失败 (返回 false):
+   → *exc 携带具体异常类型（EXC_LOAD_ACCESS_FAULT / EXC_STORE_ACCESS_FAULT 等）
+   → 函数返回 false，调用者（CPU）根据 *exc 写 mcause/mtval 并跳转 mtvec
+3. 如果翻译成功:
+   → 调用 mem_read/write_*(pmem, paddr, ...) 完成物理内存访问
+   → *exc = EXC_NONE（无异常）
+   → 返回 mem_* 的结果
 ```
+
+> **ExceptionType *exc 的语义**：`exc` 是输出参数，调用者传入 `&exc` 的地址。成功时写 `EXC_NONE`，失败时写具体异常码。PhysicalMemory 层的 `mem_*` 函数不设 exc（只返回 bool），异常类型由 MMU 层统一填充。可用的异常码参见 `types.h`（`EXC_LOAD_ACCESS_FAULT`、`EXC_STORE_ACCESS_FAULT`、`EXC_LOAD_ADDR_MISALIGNED` 等）。
+
+#### 3.2.7b mmu_read / mmu_write（批量）— 批量虚拟地址读写
+
+```
+mmu_read(mmu, pmem, vaddr, buf, len, priv, exc):
+  for i = 0 .. len-1:
+    if (!mmu_read_8(mmu, pmem, vaddr + i, &buf[i], priv, exc))
+      return false;   // *exc 携带第一个失败字节的异常类型
+  *exc = EXC_NONE;
+  return true;
+
+mmu_write(mmu, pmem, vaddr, buf, len, priv, exc):
+  同上，逐字节调用 mmu_write_8
+```
+
+> **使用场景**：`sys_write(fd, buf, len)` 需要从用户虚拟地址 `buf` 连续读 `len` 字节 → 调用 `mmu_read`；`sys_read` 同理调用 `mmu_write`。简单实现逐字节循环；后续可优化为检测连续物理页后直接 `memcpy`。
 
 #### 3.2.8 mmu_map_page — 页表映射
 
@@ -356,7 +398,7 @@ main()
   │   ├─ 遍历 Program Headers (PT_LOAD):
   │   │   ├─ mem_map(&pmem, vaddr, memsz, flags, name)  ← 注册区域
   │   │   └─ mem_load(&pmem, vaddr, data, filesz)       ← 拷贝段数据
-  │   └─ mem_map(&pmem, 0xBFFF0000, 64KB, R|W, "stack") ← 设置栈区域
+  │   └─ mem_map(&pmem, 0xBFFC0000, 0x40000, MEM_READ | MEM_WRITE, "stack") ← 设置栈区域（256KB）
   │
   ├─ cpu.pc = elf_entry
   └─ cpu.regs[sp] = 栈顶
@@ -425,5 +467,5 @@ debugger REPL
 | 页表存储方式 | **独立 malloc**（非复用物理内存） | 简化实现，避免页表自身占用物理地址空间导致的管理复杂度 |
 | 区域重叠检查 | **不做检查** | 由 ELF 加载器保证不重叠；减少运行时开销 |
 | 跨页访存 | **4/2 字节访问不跨页检查**（简化） | 对齐的 4 字节访问天然不跨页；未对齐访问在 RISC-V 中是合法但可选的，简化实现假设对齐 |
-| 大页支持 | **第一版不支持** | 4MB 大页在第一级 PDE 设置 R/W/X 即可，但标准测试程序不使用大页 |
+| 大页支持 | **第一版不支持** | 第一级 PDE 如果 R/W/X != 0 视为非法（非规范页表），`mmu_translate` 返回 false + `EXC_PAGE_FAULT_*`。标准测试程序不使用大页，后续可扩展 |
 | 线程安全 | **不考虑** | 单核模拟器，所有访问串行化 |

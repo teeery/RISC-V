@@ -1,71 +1,137 @@
-/* ============================================================================
- * types.h — 公共类型定义（所有模块共享，零依赖）
- * ============================================================================
- *
- * 对齐：并行开发方案 §0.1 + 公共类型定义文档
- */
-
 #ifndef TYPES_H
 #define TYPES_H
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <stddef.h>
 
-/* ── 特权级 ── */
+/* ============================================================
+ * types.h — 公共类型定义
+ *
+ * 所有模块共享的基础类型：寄存器索引、异常类型、特权级、
+ * 指令解码结构体、CPU 状态结构体。
+ *
+ * 设计决策（见 讨论清单.md 结论 4）：
+ *   - CPU 结构体名统一为 CPU（非 CPUState）
+ *   - 包含最小 CSR 集合（mstatus / mtvec / mepc / mcause / mtval）
+ *   - 暂不包含 mie / mip（单核无外设不需要中断）
+ *   - 暂不包含 mscratch（非必需）
+ *   - next_pc 通过 cpu_execute 的输出参数传递，不存入 CPU 状态
+ * ============================================================
+ */
+
+/* ============================================================
+ * 1. 寄存器 ABI 名称
+ * ============================================================
+ */
+typedef enum {
+    REG_ZERO = 0,   // x0  - 恒为 0
+    REG_RA   = 1,   // x1  - 返回地址
+    REG_SP   = 2,   // x2  - 栈指针
+    REG_GP   = 3,   // x3  - 全局指针
+    REG_TP   = 4,   // x4  - 线程指针
+    REG_T0   = 5,   // x5  - 临时寄存器
+    REG_T1   = 6,   // x6
+    REG_T2   = 7,   // x7
+    REG_S0   = 8,   // x8  - 帧指针 (fp)
+    REG_S1   = 9,   // x9
+    REG_A0   = 10,  // x10 - 函数参数 / 返回值
+    REG_A1   = 11,  // x11
+    REG_A2   = 12,  // x12
+    REG_A3   = 13,  // x13
+    REG_A4   = 14,  // x14
+    REG_A5   = 15,  // x15
+    REG_A6   = 16,  // x16
+    REG_A7   = 17,  // x17 - syscall 编号
+    REG_S2   = 18,  // x18
+    REG_S3   = 19,  // x19
+    REG_S4   = 20,  // x20
+    REG_S5   = 21,  // x21
+    REG_S6   = 22,  // x22
+    REG_S7   = 23,  // x23
+    REG_S8   = 24,  // x24
+    REG_S9   = 25,  // x25
+    REG_S10  = 26,  // x26
+    REG_S11  = 27,  // x27
+    REG_T3   = 28,  // x28
+    REG_T4   = 29,  // x29
+    REG_T5   = 30,  // x30
+    REG_T6   = 31,  // x31
+    REG_COUNT = 32,
+} RegisterID;
+
+/* ============================================================
+ * 2. 特权级
+ * ============================================================
+ */
 typedef enum {
     PRIV_USER       = 0,
     PRIV_SUPERVISOR = 1,
     PRIV_MACHINE    = 3,
 } PrivilegeLevel;
 
-/* ── 异常类型 ── */
+/* ============================================================
+ * 3. 异常 / 中断类型（RISC-V 特权规范）
+ *
+ * MMU 层通过 ExceptionType *exc 输出参数报告错误：
+ *   - EXC_NONE              (-1)  无异常
+ *   - EXC_LOAD_ACCESS_FAULT  (5)  页错误 / 越权（读）
+ *   - EXC_STORE_ACCESS_FAULT (7)  页错误 / 越权（写）
+ *   - EXC_INSTR_ACCESS_FAULT (1)  取指页错误
+ *   - EXC_ILLEGAL_INSTRUCTION(2)  非法指令
+ *   - EXC_BREAKPOINT         (3)  ebreak / 断点
+ * ============================================================
+ */
 typedef enum {
-    EXC_NONE                   = 0,
-    EXC_INST_ADDR_MISALIGNED   = 1,
-    EXC_INST_ACCESS_FAULT      = 2,
-    EXC_ILLEGAL_INST           = 3,
-    EXC_BREAKPOINT             = 4,
-    EXC_LOAD_ADDR_MISALIGNED   = 5,
-    EXC_LOAD_ACCESS_FAULT      = 6,
-    EXC_STORE_ADDR_MISALIGNED  = 7,
-    EXC_STORE_ACCESS_FAULT     = 8,
-    EXC_ECALL_U                = 9,
-    EXC_ECALL_S                = 10,
-    EXC_ECALL_M                = 11,
-    EXC_PAGE_FAULT_INST        = 12,
-    EXC_PAGE_FAULT_LOAD        = 13,
-    EXC_PAGE_FAULT_STORE       = 15,
+    EXC_NONE                    = -1,
+    EXC_INSTR_ADDR_MISALIGNED   = 0,
+    EXC_INSTR_ACCESS_FAULT      = 1,
+    EXC_ILLEGAL_INSTRUCTION     = 2,
+    EXC_BREAKPOINT              = 3,
+    EXC_LOAD_ADDR_MISALIGNED    = 4,
+    EXC_LOAD_ACCESS_FAULT       = 5,
+    EXC_STORE_ADDR_MISALIGNED   = 6,
+    EXC_STORE_ACCESS_FAULT      = 7,
+    EXC_ECALL_FROM_U            = 8,
+    EXC_ECALL_FROM_S            = 9,
+    EXC_ECALL_FROM_M            = 11,
 } ExceptionType;
 
-/* ── 内存权限标志（PhysicalMemory 层用）── */
-#define MEM_READ   (1 << 0)
-#define MEM_WRITE  (1 << 1)
-#define MEM_EXEC   (1 << 2)
+/* ============================================================
+ * 4. 指令解码
+ * ============================================================
+ */
 
-/* ── PTE 权限标志（MMU 页表层用）── */
-#define PTE_VALID    (1 << 0)
-#define PTE_READ     (1 << 1)
-#define PTE_WRITE    (1 << 2)
-#define PTE_EXEC     (1 << 3)
-#define PTE_USER     (1 << 4)
-#define PTE_GLOBAL   (1 << 5)
-#define PTE_ACCESSED (1 << 6)
-#define PTE_DIRTY    (1 << 7)
+/* 指令格式 */
+typedef enum {
+    FMT_R,      // R-type:  ADD rd, rs1, rs2
+    FMT_I,      // I-type:  ADDI rd, rs1, imm  (含 load / jalr / ecall)
+    FMT_S,      // S-type:  SW rs2, imm(rs1)
+    FMT_B,      // B-type:  BEQ rs1, rs2, imm
+    FMT_U,      // U-type:  LUI rd, imm
+    FMT_J,      // J-type:  JAL rd, imm
+} InstructionFormat;
 
-/* ── Sv32 常量 ── */
-#define PAGE_SIZE    4096
-#define PAGE_SHIFT   12
-#define SATP_MODE_OFF  0
-#define SATP_MODE_SV32 1
+/* 解码后的指令 */
+typedef struct {
+    uint32_t raw;           // 原始 32 位指令
+    uint8_t  opcode;        // 低 7 位操作码
+    uint8_t  rd;            // 目标寄存器  (5 bits)
+    uint8_t  rs1;           // 源寄存器 1  (5 bits)
+    uint8_t  rs2;           // 源寄存器 2  (5 bits)
+    uint8_t  funct3;        // funct3 字段 (3 bits)
+    uint8_t  funct7;        // funct7 字段 (7 bits, R-type)
+    int32_t  imm;           // 解码后的立即数（已符号扩展）
+    InstructionFormat fmt;  // 指令格式
+} DecodedInstruction;
 
-/* ── MEM → PTE 权限转换（Loader / MMU 使用）── */
-static inline uint8_t mem_perm_to_pte_flags(uint8_t mem_flags) {
-    uint8_t pte = PTE_VALID;
-    if (mem_flags & MEM_READ)  pte |= PTE_READ;
-    if (mem_flags & MEM_WRITE) pte |= PTE_WRITE;
-    if (mem_flags & MEM_EXEC)  pte |= PTE_EXEC;
-    return pte;
-}
+/* ============================================================
+ * 5. 内存访问宽度
+ * ============================================================
+ */
+typedef enum {
+    WIDTH_BYTE   = 1,
+    WIDTH_HALF   = 2,
+    WIDTH_WORD   = 4,
+} MemAccessWidth;
 
-#endif /* TYPES_H */
+#endif // TYPES_H

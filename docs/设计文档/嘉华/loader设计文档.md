@@ -3,6 +3,8 @@
 > 作者：嘉华
 > 模块：loader
 > 参考项目结构：参考项目结构1
+> 合约头文件：`src/include/loader/elf_loader.h`（对齐 [并行开发方案 §0.8](../共同部分/并行开发与验收方案.md#08-loaderelf_loaderh)）
+> 并行开发轨道：[§2C](../共同部分/并行开发与验收方案.md#2c-嘉华loader-模块elf-解析与加载)
 
 ---
 
@@ -54,7 +56,7 @@ C 源码 → 汇编 → 机器码 → ELF 文件 → ★ Loader → 物理内存
 | 物理内存怎么分配/管理 | 焕聪（memory） | 我只调 `mem_find_free`、`mem_map`，内部维护 `MemoryRegion` 链表是 memory 模块的事 |
 | 虚拟地址到物理地址的翻译 | 焕聪（memory/mmu） | 我只调 `mmu_map_page` 建立映射，Sv32 页表遍历、PTE 操作是 MMU 的事 |
 | CPU 指令执行 | 李特（cpu） | 我只输出 `*entry`，谁来写 `cpu.pc`、怎么取指译码执行，我不管 |
-| 系统调用处理 | 李特/焕聪（cpu/syscall） | `exit`/`write` 等符号在 ELF 里只是字符串，运行时 `ecall` 触发由 syscall 模块接管 |
+| 系统调用处理 | 李特（CPU） | `exit`/`write` 等符号在 ELF 里只是字符串，运行时 `ecall` 触发由 `cpu_execute()` 中的 ecall case 处理 |
 | 调试器 | 嘉俊（debugger） | 断点、单步、寄存器查看，我不参与 |
 
 ### 错误处理
@@ -77,9 +79,9 @@ C 源码 → 汇编 → 机器码 → ELF 文件 → ★ Loader → 物理内存
 ### 3.0 文件规划（重要：头文件与实现分离，模块内部解耦）
 
 ```
-src/include/elf_loader.h          ← 对外头文件：类型、常量、elf_load() 声明
+src/include/loader/elf_loader.h   ← 合约头文件（对齐并行方案 §0.8 + 文件总览）
 
-src/src/loader/                   ← Loader 模块目录
+src/src/loader/                   ← Loader 实现目录（对齐并行方案 §2C）
   ├── loader_internal.h           ← 内部头文件：各 .c 间共享的函数声明和常量
   ├── elf_validate.c              ← ELF Header 校验（纯逻辑，无副作用）
   ├── elf_segment.c               ← 段加载（权限转换、数据搬运、.bss 清零）
@@ -206,8 +208,8 @@ typedef int32_t  Elf32_Sword;   // 32 位有符号字
 
 栈常量（在 `src/src/loader/loader_internal.h` 中定义）：
 ```c
-#define STACK_TOP_DEFAULT   0xC0000000       // 对齐焕聪 memory 设计
-#define STACK_SIZE_DEFAULT  (256 * 1024)     // 256KB
+#define STACK_TOP_DEFAULT   0xC0000000      // 栈顶，和团队结论7一致
+#define STACK_SIZE_DEFAULT  (256 * 1024)     // 256KB (0x40000)，栈范围 0xBFFC0000 ~ 0xC0000000
 ```
 
 ### 3.2 内部实现思路
@@ -305,6 +307,8 @@ elf_load_segment(fp, phdr, pmem, mmu)
 | 优点 | 简单，快速跑通 | 真实模拟，支持多进程、页保护 |
 | 缺点 | 地址必须不重叠，无页保护 | 需要 MMU 模块先实现好 |
 
+> ⚠️ **重要限制**：简化版不调用 `mmu_map_page` 建立页表映射，因此 **只能在 Bare 模式（satp.MODE=0）下运行**。如果 MMU 启用了 Sv32 模式（satp.MODE=1），CPU 通过 `mmu_read_32` 取指时会因页表为空而失败（触发 `EXC_PAGE_FAULT_INST`）。在焕聪的 MMU 模块就绪前，确保 `mmu_init` 将 `satp` 设为 `SATP_MODE_OFF`（0），这样 `mmu_translate` 走 Bare 模式，`vaddr == paddr`，简化版即可正常工作。
+
 **建议：先用简化版把流程跑通，等焕聪的 MMU 模块就绪后再切换到完善版。**
 
 #### 关键设计决策
@@ -319,7 +323,7 @@ elf_load_segment(fp, phdr, pmem, mmu)
 4. 加载完成后 `free`，内存峰值 = 最大段大小（通常 < 1MB）
 
 **为什么栈放在 `0xC0000000`？**
-对齐焕聪 memory 设计文档中的内存布局（栈顶 `0xC0000000`，栈底 `0xBFFC0000` = 栈顶 - 256KB）。`0xC0000000` 接近真实 Linux 用户空间顶部（3GB 位置），留给代码/数据/堆从低地址向上增长足够空间。
+这是团队讨论结论（结论 7），和参考项目 2 一致。`0xC0000000` 接近 3GB 位置，更接近真实 Linux 用户空间布局。栈向下增长 256KB，范围 `0xBFFC0000` ~ `0xC0000000`。
 
 **为什么用输出参数而不是返回值？**
 Loader 需要输出两个值（`entry` 和 `stack_top`），但返回值已被占用（表示成功/失败）。用指针输出是 C 的惯用做法，调用者（main.c）这样使用：
@@ -372,7 +376,7 @@ main.c
        ├─ mmu_read_32(&mmu, &pmem, cpu.pc, ...)   ← 通过 MMU 取指令
        ├─ decode(instruction)
        └─ execute(...)
-            ├─ 可能触发 syscall → syscall 模块处理
+            ├─ 可能触发 ecall → cpu_execute() 内 syscall case 处理
             └─ 可能命中断点 → debugger 模块接管（嘉俊）
     }
 ```
@@ -457,39 +461,90 @@ src/src/loader/
 | 6 | `cpu.pc` 和 `cpu.regs[REG_SP]` 字段确认存在 | 李特 | types.h:117-118 |
 | 7 | `REG_SP` = 2 已在 types.h 枚举中定义 | 李特 | types.h:35 |
 | 8 | `PhysicalMemory` 的 `size` 字段默认 128MB | 焕聪 | memory.h:28 |
-| 9 | 栈基址 `0xC0000000`，大小 256KB — 是否需要调整？ | 全体讨论 | 暂定 |
-| 10 | 完善版 `mmu_map_page` 标志位用的是 PTE_*（`PTE_READ=1, PTE_WRITE=2, PTE_EXEC=3`）还是 MEM_*？需要统一 | 焕聪 | 待确认 |
-| 11 | `elf_load` 输出了 `entry` 和 `stack_top`，main.c 里谁来写 `cpu.pc` / `cpu.regs[REG_SP]`？ | 李特 | 建议由 main.c 或 simulator 层负责 |
+| 9 | 栈基址 `0xC0000000`，大小 256KB，范围 `0xBFFC0000` ~ `0xC0000000`（团队结论 7） | 全体讨论 | ✅ 已确定 |
+| 10 | `mmu_map_page` 标志位使用 PTE_*（`PTE_VALID=1, PTE_READ=2, PTE_WRITE=4, PTE_EXEC=8, PTE_USER=16`），与 MEM_* 值不同，需通过 `mem_perm_to_pte_flags()` 转换（见公共类型定义） | 焕聪 | ✅ 已确定 |
+| 11 | `elf_load` 输出了 `entry` 和 `stack_top`，main.c 里谁来写 `cpu.pc` / `cpu.regs[REG_SP]`？ | 李特 | ✅ 已确定：由 main.c 或 `sim_load_elf` 负责写入（见讨论清单结论 7） |
 
 ---
 
 ## 6. 测试计划
 
-### 单元测试（LOADER 独立测试）
+> 对齐 [并行开发方案 §2C](../共同部分/并行开发与验收方案.md#2c-嘉华loader-模块elf-解析与加载)，
+> 使用 Stub PhysicalMemory + Stub MMU 独立测试，不依赖其他队友的模块。
+
+### 测试目录
+
+```
+test/loader/
+├── gen_minimal_elf.c     ← ELF 生成工具（在 x86 宿主机上运行，产出 minimal.elf）
+├── test_validate.c       ← L1：校验测试
+├── test_load.c           ← L2：加载测试
+└── test_stack.c          ← L3：栈测试
+```
+
+### 测试 ELF 文件的生成（方式 A：手写最小 ELF）
+
+不需要 RISC-V 交叉编译器。写一个 C 程序在宿主机上生成最小合法 ELF32 文件：
+
+```
+test/loader/gen_minimal_elf.c
+  → 编译：gcc gen_minimal_elf.c -o gen_minimal_elf
+  → 运行：./gen_minimal_elf
+  → 产出：minimal.elf（内容：addi a0, zero, 42; ecall）
+```
+
+> 等交叉编译环境（`riscv64-unknown-elf-gcc`）搭好后，再用方式 B 生成复杂测试用例。
+
+### L1：校验测试（test_validate.c）
+
+**依赖**：无（纯单元测试，不需要 Simulator）
 
 | 测试用例 | 输入 | 预期结果 |
 |----------|------|---------|
-| 正常 ELF32 | `hello.elf`（标准 RISC-V 32 位可执行文件） | 返回 `true`，打印 loaded 信息，`entry` 有值 |
-| 文件不存在 | `nonexistent.elf` | 返回 `false`，`perror` 输出 |
-| 非 ELF 文件 | 普通 `.txt` 文件 | 返回 `false`，"Not a valid ELF file" |
-| 64 位 ELF | 用 `-march=rv64` 编译的 ELF | 返回 `false`，"Only ELF32 is supported" |
-| 大端序 ELF | 大端序 ELF（如果有） | 返回 `false`，"Only little-endian is supported" |
-| x86 二进制 | 任意 x86 ELF | 返回 `false`，"Not a RISC-V binary" |
-| 可重定位文件（.o） | `gcc -c` 产生的 `.o` 文件 | 返回 `false`，"Not an executable file" |
-| 段超内存 | `paddr + p_memsz > 128MB` 的 ELF | 返回 `false`，"Segment exceeds physical memory" |
+| 合法 ELF32 RISC-V 可执行文件 | `minimal.elf` | `elf_validate_header()` 返回 `true` |
+| 不是 ELF 文件（magic 错） | 伪造的 `e_ident` | 返回 `false`，"Not a valid ELF file" |
+| 64 位 ELF | `e_ident[4] = 2` | 返回 `false`，"Only ELF32 is supported" |
+| 大端序 ELF | `e_ident[5] = 2` | 返回 `false`，"Only little-endian is supported" |
+| 不是 RISC-V | `e_machine = 62` (x86) | 返回 `false`，"Not a RISC-V binary" |
+| 不是可执行文件 | `e_type = 1` (.o 文件) | 返回 `false`，"Not an executable file" |
 
-### 集成测试（LOADER → CPU 联合测试）
+### L2：加载测试（test_load.c）
 
-| 测试用例 | 说明 | 预期结果 |
+**依赖**：Stub PhysicalMemory + Stub MMU（Bare 模式，vaddr = paddr）
+
+| 测试用例 | 说明 | 验收方式 |
 |----------|------|---------|
-| 加载后 CPU 执行 `hello.elf` | Loader 加载 → CPU 从 `entry` 开始执行 | 程序正常 exit |
-| 加载后检查栈 | Loader 加载后检查 `stack_top` 值 | `0xC0000000`，栈区域已映射 |
-| .bss 清零验证 | 写一个有全局变量的 C 程序，编译后加载 | 全局变量初始值为 0 |
+| 加载 minimal.elf | `elf_load()` 返回 `true` | `entry` 非零，`stack_top = 0xC0000000` |
+| 段数据在内存正确位置 | `mmu_read_32(pmem, entry, &insn)` | 读到的指令 = ELF 第一条指令的编码 |
+| .bss 清零验证 | 写一个有 .bss 段的 ELF | .bss 区域全部为 0 |
+| 栈区域可读写 | 向 `stack_top - 4` 写 `0xCAFEBABE` 再读回 | 读回值 = `0xCAFEBABE` |
+| 文件不存在 | `elf_load("nonexistent", ...)` | 返回 `false` |
+| 段超物理内存 | 段地址 + 大小 > 128MB | 返回 `false` |
+
+### L3：栈测试（test_stack.c）
+
+**依赖**：Stub PhysicalMemory + Stub MMU
+
+| 测试用例 | 验收项 |
+|----------|--------|
+| `stack_top` 值 | `= 0xC0000000` |
+| 栈区域大小 | `0xC0000000 - 0xBFFC0000 = 256KB` |
+| 栈区域映射 | `mem_map` 已注册名为 "stack" 的区域 |
+| 栈区域权限 | `MEM_READ | MEM_WRITE`（不可执行） |
+
+### 集成测试（阶段 3，等 CPU 就绪后）
+
+| 步骤 | 说明 | 验收 |
+|------|------|------|
+| 李特用 `sim_load_elf` 替换 `test_load_insns` | ELF → Loader → MMU → CPU → exit | `./rvsim minimal.elf` 返回 42 |
+| 端到端 hello 程序 | 用交叉编译器产出的 hello.elf | 程序正常 exit，输出 "Hello, RISC-V!" |
 
 ### 调试辅助
 
 Loader 加载成功后应打印：
 ```
-ELF loaded: entry=0x000100b0, stack=0x7ffff000
+ELF loaded: minimal.elf
+  Entry:  0x000100b0
+  Stack:  0xc0000000 (size: 256 KB)
 ```
-（具体 entry 值取决于链接脚本，示例中使用 `riscv32-unknown-elf-gcc` 默认链接脚本的典型值）
+（具体 entry 值取决于 ELF 的链接脚本）
