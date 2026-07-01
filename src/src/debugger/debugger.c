@@ -1,8 +1,5 @@
 #include "debugger/debugger.h"
-#include "simulator.h"
-#include "cpu/cpu.h"
-#include "memory/memory.h"
-#include "mmu/mmu.h"
+#include "simulator.h"       // Simulator, Breakpoint, sim_step, STACK_BASE, STACK_TOP
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

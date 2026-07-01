@@ -1,6 +1,5 @@
 #include "debugger/debugger.h"
 #include "simulator.h"       // Simulator, Breakpoint
-#include "mmu/mmu.h"         // mmu_read_32, mmu_write_32
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
