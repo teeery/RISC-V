@@ -16,7 +16,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include "elf_loader.h"
 #include "loader_internal.h"
 
@@ -54,21 +53,45 @@ bool elf_load_segment(FILE *fp, Elf32_Phdr *phdr,
 
     /* ---- 从 ELF 文件拷贝段数据 ---- */
     if (phdr->p_filesz > 0) {
+        /* 先读文件到临时缓冲区，再通过 mem_load 写入物理内存 */
+        uint8_t *buf = (uint8_t *)malloc(phdr->p_filesz);
+        if (!buf) {
+            fprintf(stderr, "Error: Failed to allocate segment buffer\n");
+            return false;
+        }
         fseek(fp, phdr->p_offset, SEEK_SET);
-        size_t n = fread(pmem->data + paddr, 1, phdr->p_filesz, fp);
+        size_t n = fread(buf, 1, phdr->p_filesz, fp);
         if (n != phdr->p_filesz) {
             fprintf(stderr, "Error: Failed to read segment data "
                     "(expected %u bytes, got %zu)\n",
                     phdr->p_filesz, n);
+            free(buf);
             return false;
         }
+        /* 通过 memory 模块接口写入，不直接操作 pmem->data[] */
+        if (!mem_load(pmem, paddr, buf, phdr->p_filesz)) {
+            fprintf(stderr, "Error: mem_load failed\n");
+            free(buf);
+            return false;
+        }
+        free(buf);
     }
 
-    /* ---- .bss 段清零 ---- */
+    /* ---- .bss 段清零（通过 mem_load 写入零缓冲区）---- */
     if (phdr->p_memsz > phdr->p_filesz) {
-        uint32_t bss_offset = paddr + phdr->p_filesz;
-        uint32_t bss_size   = phdr->p_memsz - phdr->p_filesz;
-        memset(pmem->data + bss_offset, 0, bss_size);
+        uint32_t bss_addr = paddr + phdr->p_filesz;
+        uint32_t bss_size = phdr->p_memsz - phdr->p_filesz;
+        uint8_t *zero_buf = (uint8_t *)calloc(1, bss_size);
+        if (!zero_buf) {
+            fprintf(stderr, "Error: Failed to allocate bss buffer\n");
+            return false;
+        }
+        if (!mem_load(pmem, bss_addr, zero_buf, bss_size)) {
+            fprintf(stderr, "Error: mem_load bss failed\n");
+            free(zero_buf);
+            return false;
+        }
+        free(zero_buf);
     }
 
     return true;

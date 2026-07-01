@@ -124,7 +124,7 @@ bool elf_load(const char *filename, PhysicalMemory *pmem, MMUState *mmu,
 | `pmem` | 输入/输出 | 物理内存指针，段数据写入其 `data[]` 数组 |
 | `mmu` | 输入/输出 | MMU 状态指针，用于建立虚拟地址页表映射 |
 | `entry` | **输出** | 程序入口虚拟地址（`e_entry`），调用者写入 `cpu.pc` |
-| `stack_top` | **输出** | 栈顶虚拟地址（`0x7FFFF000`），调用者写入 `cpu.regs[REG_SP]` |
+| `stack_top` | **输出** | 栈顶虚拟地址（`0xC0000000`），调用者写入 `cpu.regs[REG_SP]` |
 | 返回值 | 输出 | `true` 加载成功，`false` 失败（已打印错误信息） |
 
 **实现位置：** [`src/loader/elf_load.c`](../../src/src/loader/elf_load.c)
@@ -204,10 +204,10 @@ typedef int32_t  Elf32_Sword;   // 32 位有符号字
 #define PF_R         4         // 可读
 ```
 
-栈常量（在 `src/loader/loader_internal.h` 中定义）：
+栈常量（在 `src/src/loader/loader_internal.h` 中定义）：
 ```c
-#define STACK_TOP_DEFAULT   0x7FFFF000
-#define STACK_SIZE_DEFAULT  (256 * 1024)   // 256KB
+#define STACK_TOP_DEFAULT   0xC0000000       // 对齐焕聪 memory 设计
+#define STACK_SIZE_DEFAULT  (256 * 1024)     // 256KB
 ```
 
 ### 3.2 内部实现思路
@@ -246,7 +246,8 @@ elf_load(filename, pmem, mmu, entry, stack_top)
 │
 ├─ 7. elf_setup_stack(pmem, stack_top) ← ★ 已实现（elf_stack.c）
 │     ├─ mem_map(pmem, base, 256KB, RW, "stack")
-│     └─ *stack_top = STACK_TOP_DEFAULT
+│     │   其中 base = 0xC0000000 - 256KB = 0xBFFC0000
+│     └─ *stack_top = 0xC0000000
 │
 └─ 8. printf 加载信息, return true   ← ★ 已实现
 ```
@@ -270,14 +271,18 @@ elf_load_segment(fp, phdr, pmem, mmu)
 │  if (phdr->p_flags & PF_X) flags |= MEM_EXEC
 │  mem_map(pmem, paddr, phdr->p_memsz, flags, "segment")
 │
-│  // 从文件拷贝数据
+│  // 从文件拷贝数据（通过 memory 接口）
+│  buf = malloc(phdr->p_filesz)
 │  fseek(fp, phdr->p_offset, SEEK_SET)
-│  fread(pmem->data + paddr, 1, phdr->p_filesz, fp)
+│  fread(buf, 1, phdr->p_filesz, fp)
+│  mem_load(pmem, paddr, buf, phdr->p_filesz)  ← 对齐焕聪 memory 接口
+│  free(buf)
 │
 │  // .bss 清零
 │  if (phdr->p_memsz > phdr->p_filesz):
-│    memset(pmem->data + paddr + phdr->p_filesz, 0,
-│           phdr->p_memsz - phdr->p_filesz)
+│    zero_buf = calloc(1, bss_size)
+│    mem_load(pmem, paddr + filesz, zero_buf, bss_size)
+│    free(zero_buf)
 │
 │  // ============ TODO：完善版应该做的事 ============
 │  // 1. 用 mem_find_free(pmem, p_memsz, p_align) 在物理内存中找空闲区域
@@ -304,15 +309,17 @@ elf_load_segment(fp, phdr, pmem, mmu)
 
 #### 关键设计决策
 
-**为什么直接写 `pmem->data[]` 而不是调用 `mmu_write`？**
-参考项目结构1 的架构是 Loader 直接操作物理内存。MMU 的读写接口（`mmu_read_32` 等）是给 CPU 用的——CPU 只知道虚拟地址。但 Loader 在加载阶段拥有全局视角，直接写物理内存更高效，绕开了"还没映射就要翻译"的鸡生蛋问题。
-等完善版用 `mmu_map_page` 建立映射后，CPU 就能通过虚拟地址访问到 Loader 写入的数据。
+**为什么用 `mem_load()` 而不是直接写 `pmem->data[]`？**
+对齐焕聪 memory 模块接口。`mem_load(pmem, addr, buf, size)` 是 PhysicalMemory 层提供的批量数据加载接口，Loader 只需把文件数据读到临时缓冲区再传入即可。这保证 Loader 不绕过 memory 模块直接操作内部数据结构（`data[]` 数组），接口更干净。
 
-**为什么文件读写直接用 `fread` 不用 4KB 缓冲区？**
-`fread(pmem->data + paddr, 1, p_filesz, fp)` 一次读完整个段，简单直接。C 标准库的 `fread` 内部已经做了缓冲，不需要我们再做一层。段的 `p_filesz` 通常只有几十 KB，不会造成栈溢出。
+**为什么用 `malloc` 临时缓冲区 + `mem_load` 的组合？**
+1. `malloc(phdr->p_filesz)` 分配临时缓冲区 → `fread` 读文件 → `mem_load(pmem, ...)` 写入物理内存
+2. 不直接在栈上开大数组，避免段过大时栈溢出
+3. 通过 `mem_load` 接口写入，不直接操作 `pmem->data[]`，保持模块边界清晰
+4. 加载完成后 `free`，内存峰值 = 最大段大小（通常 < 1MB）
 
-**为什么栈放在 `0x7FFFF000`？**
-这是 RISC-V 用户态程序的典型栈顶地址。栈向下增长，`0x7FFFF000 - 256KB = 0x7FFBF000` 是栈底。选择高地址（接近 2GB 边界）留给堆足够的向上增长空间。
+**为什么栈放在 `0xC0000000`？**
+对齐焕聪 memory 设计文档中的内存布局（栈顶 `0xC0000000`，栈底 `0xBFFC0000` = 栈顶 - 256KB）。`0xC0000000` 接近真实 Linux 用户空间顶部（3GB 位置），留给代码/数据/堆从低地址向上增长足够空间。
 
 **为什么用输出参数而不是返回值？**
 Loader 需要输出两个值（`entry` 和 `stack_top`），但返回值已被占用（表示成功/失败）。用指针输出是 C 的惯用做法，调用者（main.c）这样使用：
@@ -356,7 +363,7 @@ main.c
   │    │
   │    └─ elf_setup_stack(pmem, stack_top)        ← elf_stack.c
   │         ├─ mem_map(pmem, base, 256KB, RW, "stack")
-  │         └─ *stack_top = 0x7FFFF000
+  │         └─ *stack_top = 0xC0000000
   │
   ├─ cpu.pc = entry                          ← CPU 模块拿到入口（李特）
   ├─ cpu.regs[REG_SP] = stack_top            ← CPU 模块拿到栈指针（李特）
@@ -450,7 +457,7 @@ src/src/loader/
 | 6 | `cpu.pc` 和 `cpu.regs[REG_SP]` 字段确认存在 | 李特 | types.h:117-118 |
 | 7 | `REG_SP` = 2 已在 types.h 枚举中定义 | 李特 | types.h:35 |
 | 8 | `PhysicalMemory` 的 `size` 字段默认 128MB | 焕聪 | memory.h:28 |
-| 9 | 栈基址 `0x7FFFF000`，大小 256KB — 是否需要调整？ | 全体讨论 | 暂定 |
+| 9 | 栈基址 `0xC0000000`，大小 256KB — 是否需要调整？ | 全体讨论 | 暂定 |
 | 10 | 完善版 `mmu_map_page` 标志位用的是 PTE_*（`PTE_READ=1, PTE_WRITE=2, PTE_EXEC=3`）还是 MEM_*？需要统一 | 焕聪 | 待确认 |
 | 11 | `elf_load` 输出了 `entry` 和 `stack_top`，main.c 里谁来写 `cpu.pc` / `cpu.regs[REG_SP]`？ | 李特 | 建议由 main.c 或 simulator 层负责 |
 
@@ -476,7 +483,7 @@ src/src/loader/
 | 测试用例 | 说明 | 预期结果 |
 |----------|------|---------|
 | 加载后 CPU 执行 `hello.elf` | Loader 加载 → CPU 从 `entry` 开始执行 | 程序正常 exit |
-| 加载后检查栈 | Loader 加载后检查 `stack_top` 值 | `0x7FFFF000`，栈区域已映射 |
+| 加载后检查栈 | Loader 加载后检查 `stack_top` 值 | `0xC0000000`，栈区域已映射 |
 | .bss 清零验证 | 写一个有全局变量的 C 程序，编译后加载 | 全局变量初始值为 0 |
 
 ### 调试辅助

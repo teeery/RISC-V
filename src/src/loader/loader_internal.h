@@ -14,8 +14,8 @@
 #include "mmu.h"
 
 /* ---- 常量 ---- */
-#define STACK_TOP_DEFAULT   0x7FFFF000
-#define STACK_SIZE_DEFAULT  (256 * 1024)  // 256 KB
+#define STACK_TOP_DEFAULT   0xC0000000       // 对齐焕聪 memory 设计
+#define STACK_SIZE_DEFAULT  (256 * 1024)     // 256 KB
 
 /* ---- 内部函数声明 ---- */
 
