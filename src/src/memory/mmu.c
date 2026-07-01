@@ -268,6 +268,7 @@ bool mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
 {
     uint32_t vpn1 = (vaddr >> VPN1_SHIFT) & 0x3FF;
     uint32_t vpn0 = (vaddr >> VPN0_SHIFT) & 0x3FF;
+    (void)vpn0; // TODO: 页表管理器就绪后用于写入第二级 PTE
     uint32_t ppn  = paddr >> PAGE_SHIFT;
 
     /* MEM_* → PTE_* 转换：左移 1 位 + PTE_VALID
@@ -278,8 +279,6 @@ bool mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
     if (flags & MEM_READ)  pte_flags |= PTE_READ;
     if (flags & MEM_WRITE) pte_flags |= PTE_WRITE;
     if (flags & MEM_EXEC)  pte_flags |= PTE_EXEC;
-
-    uint32_t pte = make_pte(ppn, pte_flags);
 
     /* 确保根页表存在 */
     if (!mmu->root_page_table) {
@@ -292,16 +291,19 @@ bool mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
         /* 分配第二级页表 */
         /* TODO: 需要页表管理器追踪所有第二级页表以便 mmu_translate 查找 */
         uint32_t *l2 = (uint32_t *)calloc(PT_ENTRIES, sizeof(uint32_t));
+        (void)l2;  // TODO: 页表管理器就绪后移除
         ppn = 0; // 占位：实际应由页表管理器分配物理页号
         l1[vpn1] = make_pte(ppn, PTE_VALID);
     }
 
     /* 第二级 PTE */
     ppn = paddr >> PAGE_SHIFT;  // 恢复真正的 PPN
-    uint32_t *l2 = NULL; // TODO: 从页表管理器获取 l2 指针
+    /* TODO: 从页表管理器获取 l2 指针并写入 PTE
+    uint32_t *l2 = get_l2_table(pte_to_ppn(l1[vpn1]));
     if (l2) {
         l2[vpn0] = make_pte(ppn, pte_flags);
     }
+    */
 
     return true;
 }

@@ -135,6 +135,7 @@ bool mem_map(PhysicalMemory *pmem, uint32_t base, uint32_t size,
 
 uint32_t mem_find_free(PhysicalMemory *pmem, uint32_t size, uint32_t align)
 {
+    (void)size;  // 当前简单策略不检查 size 是否可用，只返回空闲起始地址
     /* 简单策略：找到所有已映射区域的最大末尾地址，对齐后返回 */
     uint32_t max_end = 0;
     for (int i = 0; i < pmem->region_count; i++) {
