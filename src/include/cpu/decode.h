@@ -58,10 +58,10 @@ typedef struct {
     uint8_t  funct3;   // 3 位功能码
     uint8_t  funct7;   // 7 位功能码（R-type 用）
     int32_t  imm;      // 立即数（已符号扩展到 32 位）
-} DecodedInsn;
+} DecodedInstr;
 
-/* 解码一条 32 位指令 → DecodedInsn */
-DecodedInsn cpu_decode(uint32_t instr);
+/* 解码一条 32 位指令 → DecodedInstr */
+DecodedInstr cpu_decode(uint32_t instr);
 
 /* 反汇编：instr → 人类可读的汇编字符串（供 Debugger 使用）*/
 void cpu_disasm(uint32_t instr, uint32_t pc, char *buf, size_t bufsz);

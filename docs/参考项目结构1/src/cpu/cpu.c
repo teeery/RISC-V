@@ -1,4 +1,4 @@
-#include <stdio.h>
+﻿#include <stdio.h>
 #include <string.h>
 
 /* ============================================================
@@ -132,28 +132,28 @@ void cpu_reset(CPUState *cpu)
 /* ── 单步执行 ────────────────────────────────────────────── */
 bool cpu_step(CPUState *cpu, PhysicalMemory *pmem, MMUState *mmu)
 {
-    uint32_t raw_insn;
+    uint32_t raw_Instr;
     DecodedInstruction dec;
 
     cpu->next_pc = cpu->pc + 4;  // 默认顺序执行
 
     /* IF: 取值 */
-    if (!mmu_read_32(mmu, pmem, cpu->pc, &raw_insn, cpu->priv)) {
+    if (!mmu_read_32(mmu, pmem, cpu->pc, &raw_Instr, cpu->priv)) {
         cpu_take_trap(cpu, EXC_INSTR_ACCESS_FAULT, cpu->pc);
         cpu->pc = cpu->next_pc;
         return false;
     }
 
     /* ID: 译码 */
-    if (!decode(raw_insn, &dec)) {
-        cpu_take_trap(cpu, EXC_ILLEGAL_INSTRUCTION, raw_insn);
+    if (!decode(raw_Instr, &dec)) {
+        cpu_take_trap(cpu, EXC_ILLEGAL_INSTRUCTION, raw_Instr);
         cpu->pc = cpu->next_pc;
         return false;
     }
 
     /* 跟踪输出 */
     if (g_trace_enabled) {
-        printf("[TRACE] 0x%08x: 0x%08x\n", cpu->pc, raw_insn);
+        printf("[TRACE] 0x%08x: 0x%08x\n", cpu->pc, raw_Instr);
     }
 
     /* EX + MEM + WB: 执行 */

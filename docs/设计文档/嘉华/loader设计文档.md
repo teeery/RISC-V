@@ -1,4 +1,4 @@
-# Loader（ELF 加载器）设计文档
+﻿# Loader（ELF 加载器）设计文档
 
 > 作者：嘉华
 > 模块：loader
@@ -515,7 +515,7 @@ test/loader/gen_minimal_elf.c
 | 测试用例 | 说明 | 验收方式 |
 |----------|------|---------|
 | 加载 minimal.elf | `elf_load()` 返回 `true` | `entry` 非零，`stack_top = 0xC0000000` |
-| 段数据在内存正确位置 | `mmu_read_32(pmem, entry, &insn)` | 读到的指令 = ELF 第一条指令的编码 |
+| 段数据在内存正确位置 | `mmu_read_32(pmem, entry, &Instr)` | 读到的指令 = ELF 第一条指令的编码 |
 | .bss 清零验证 | 写一个有 .bss 段的 ELF | .bss 区域全部为 0 |
 | 栈区域可读写 | 向 `stack_top - 4` 写 `0xCAFEBABE` 再读回 | 读回值 = `0xCAFEBABE` |
 | 文件不存在 | `elf_load("nonexistent", ...)` | 返回 `false` |
@@ -536,7 +536,7 @@ test/loader/gen_minimal_elf.c
 
 | 步骤 | 说明 | 验收 |
 |------|------|------|
-| 李特用 `sim_load_elf` 替换 `test_load_insns` | ELF → Loader → MMU → CPU → exit | `./rvsim minimal.elf` 返回 42 |
+| 李特用 `sim_load_elf` 替换 `test_load_Instrs` | ELF → Loader → MMU → CPU → exit | `./rvsim minimal.elf` 返回 42 |
 | 端到端 hello 程序 | 用交叉编译器产出的 hello.elf | 程序正常 exit，输出 "Hello, RISC-V!" |
 
 ### 调试辅助

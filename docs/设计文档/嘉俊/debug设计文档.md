@@ -1,4 +1,4 @@
-# Debugger 设计文档
+﻿# Debugger 设计文档
 
 > 作者：嘉俊 | 最后更新：2026-07-01
 >
@@ -74,7 +74,7 @@ Debugger 提供一个交互式命令行界面（REPL），提示符为 `(rvsim) 
 设断点前: 0x10074: [原始指令 addi sp, sp, -16]
          ↓ b 0x10074
 设断点后: 0x10074: [EBREAK 0x00100073]
-                 原始指令被保存到 sim->breakpoints[i].original_insn
+                 原始指令被保存到 sim->breakpoints[i].original_Instr
          ↓ CPU 执行到 0x10074
 命中时:   CPU 读到 EBREAK → 触发 EXC_BREAKPOINT
          CPU 遍历 sim->breakpoints[]，发现 PC 在列表中：
@@ -139,7 +139,7 @@ types.h                         ← 零依赖，基础枚举和宏
       │
       └── simulator.h           ← Simulator + Breakpoint（顶层聚合）
             │
-            ├── Breakpoint { uint32_t addr; uint32_t original_insn; bool enabled; }
+            ├── Breakpoint { uint32_t addr; uint32_t original_Instr; bool enabled; }
             └── Simulator { CPU cpu; MMUState mmu; PhysicalMemory pmem;
                             Breakpoint *breakpoints; int bp_count; int bp_capacity;
                             bool single_step; bool debug_mode;
@@ -165,7 +165,7 @@ types.h                         ← 零依赖，基础枚举和宏
 | 字段 | 类型 | Debugger 如何操作 |
 |------|------|-----------------|
 | `addr` | `uint32_t` | 设断点时赋值；删除/命中时比对 PC；退出时恢复原始指令 |
-| `original_insn` | `uint32_t` | 设断点时通过 `mmu_read_32` 读取并保存；命中后恢复时通过 `mmu_write_32` 写回 |
+| `original_Instr` | `uint32_t` | 设断点时通过 `mmu_read_32` 读取并保存；命中后恢复时通过 `mmu_write_32` 写回 |
 | `enabled` | `bool` | 设断点时设为 `true`；`info breakpoints` 显示 "y/n" |
 
 **`Simulator` 中 Debugger 相关的字段：**
@@ -291,7 +291,7 @@ void debugger_print_backtrace(struct Simulator *sim);
 ④ 保存原始指令（通过 MMU 读虚拟地址）：
      ExceptionType exc = EXC_NONE;
      mmu_read_32(&sim->mmu, &sim->pmem, addr,
-                 &sim->breakpoints[bp_count].original_insn,
+                 &sim->breakpoints[bp_count].original_Instr,
                  sim->cpu.priv, &exc);
      失败则提示 "Cannot read memory at 0x..." 并返回 -1
 ⑤ 写入 EBREAK（通过 MMU 写虚拟地址）：
@@ -316,7 +316,7 @@ CPU 读到 EBREAK (0x00100073) → 触发 EXC_BREAKPOINT
   ├── PC 在断点列表中 → 用户设的断点（由 Debugger 的 ebreak 替换触发）
   │    ① 恢复原始指令：
   │       mmu_write_32(&sim->mmu, &sim->pmem, pc,
-  │                     bp->original_insn, sim->cpu.priv, &exc);
+  │                     bp->original_Instr, sim->cpu.priv, &exc);
   │    ② *next_pc = pc（不前进 PC，停在断点地址）
   │    ③ cpu.running = false，暂停执行
   │    ④ 打印 "Hit breakpoint at 0x..."
@@ -473,8 +473,8 @@ main.c:
         ▼
 debugger_add_breakpoint(sim, 0x10074)
   ① Debugger → MMU: mmu_read_32(&sim->mmu, &sim->pmem, 0x10074,
-                                  &orig_insn, sim->cpu.priv, &exc)
-     读取原始指令，保存到 sim->breakpoints[0].original_insn
+                                  &orig_Instr, sim->cpu.priv, &exc)
+     读取原始指令，保存到 sim->breakpoints[0].original_Instr
   ② Debugger → MMU: mmu_write_32(&sim->mmu, &sim->pmem, 0x10074,
                                    0x00100073, sim->cpu.priv, &exc)
      写入 EBREAK 替换
@@ -493,7 +493,7 @@ debugger_continue(sim)
        mmu_read_32 → 读到 EBREAK
        cpu_execute → 检测到 EBREAK → 查 sim->breakpoints[]
        → 命中 sim->breakpoints[0]！
-         恢复原始指令: mmu_write_32(0x10074, orig_insn)
+         恢复原始指令: mmu_write_32(0x10074, orig_Instr)
          sim->cpu.running = false
   ④ 打印 "Hit breakpoint 0 at 0x00010074"
   ⑤ 打印寄存器状态
@@ -555,7 +555,7 @@ Debugger:
        for (i = 0; i < sim->bp_count; i++) {
            mmu_write_32(&sim->mmu, &sim->pmem,
                         sim->breakpoints[i].addr,
-                        sim->breakpoints[i].original_insn,
+                        sim->breakpoints[i].original_Instr,
                         sim->cpu.priv, &exc);
        }
   ② free(sim->breakpoints)（在 sim_destroy 中统一做）
@@ -596,7 +596,7 @@ Debugger:
 当 cpu_execute 检测到 ebreak (opcode=0x73, imm=1) 时：
   ① 遍历 sim->breakpoints[0..bp_count-1]，看当前 PC 是否在列表中
   ② 如果在 → 用户断点：
-       - 恢复原始指令: mmu_write_32(addr, bp->original_insn)
+       - 恢复原始指令: mmu_write_32(addr, bp->original_Instr)
        - *next_pc = pc（不前进 PC，停在断点地址）
        - cpu.running = false（暂停执行）
        - 打印 "Hit breakpoint at 0x..."

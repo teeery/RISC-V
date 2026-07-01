@@ -11,7 +11,7 @@
  *   cpu_execute() — 执行一条已解码的指令
  *   cpu_trap()    — 异常处理（填写 CSR 并跳转到 mtvec）
  *
- * 依赖：前置声明 Simulator、DecodedInsn（避免循环 include）
+ * 依赖：前置声明 Simulator、DecodedInstr（避免循环 include）
  *       cpu_execute 内部通过 Simulator* 访问 mmu、pmem、breakpoints
  * ============================================================ */
 
@@ -19,8 +19,8 @@
 struct Simulator;
 typedef struct Simulator Simulator;
 
-struct DecodedInsn;
-typedef struct DecodedInsn DecodedInsn;
+struct DecodedInstr;
+typedef struct DecodedInstr DecodedInstr;
 
 /* 执行一条已解码的指令
  *
@@ -38,7 +38,7 @@ typedef struct DecodedInsn DecodedInsn;
  *   - 通过 sim->mmu + sim->pmem 访问内存（只调 mmu_read/write_*，不直接调 mem_*）
  *   - 每条指令执行后必须执行 sim->cpu.regs[0] = 0（x0 硬连线）
  */
-bool cpu_execute(Simulator *sim, DecodedInsn *d, uint32_t *next_pc);
+bool cpu_execute(Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
 
 /* 异常处理：按 RISC-V 特权规范填写 CSR 并跳转到 mtvec
  *

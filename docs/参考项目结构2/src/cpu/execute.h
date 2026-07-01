@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * execute.h — 指令执行
  * ============================================================================
  *
@@ -6,7 +6,7 @@
  *
  *   // 执行一条已解码的指令，*next_pc 默认为 pc+4，跳转/分支指令会修改
  *   // 返回 true 表示正常执行（包括 ecall），返回 false 表示异常（如未知 opcode）
- *   bool cpu_execute(Simulator *sim, DecodedInsn *d, uint32_t *next_pc);
+ *   bool cpu_execute(Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
  *
  *   参数说明：
  *     sim:     模拟器对象，可访问 regs、mmu、统计计数器
@@ -28,7 +28,7 @@
 #define EXECUTE_H
 
 #include "common.h"
-// #include "decode.h"  // DecodedInsn 结构体
+// #include "decode.h"  // DecodedInstr 结构体
 // #include "../simulator.h"  // Simulator 结构体
 
 /* ---- 在这里声明 cpu_execute 函数 ---- */

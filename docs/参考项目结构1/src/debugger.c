@@ -1,4 +1,4 @@
-#include <stdio.h>
+﻿#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
@@ -118,10 +118,10 @@ int debugger_add_breakpoint(DebuggerState *dbg, uint32_t addr)
     bp->addr      = addr;
     bp->enabled   = true;
     // TODO: 读取并保存原始指令 (用于软件断点恢复)
-    // mmu_read_32(dbg->mmu, dbg->pmem, addr, &bp->original_insn, dbg->cpu->priv);
+    // mmu_read_32(dbg->mmu, dbg->pmem, addr, &bp->original_Instr, dbg->cpu->priv);
     // 将断点处指令替换为 EBREAK
     // mmu_write_32(dbg->mmu, dbg->pmem, addr, 0x00100073, dbg->cpu->priv);
-    bp->original_insn = 0;
+    bp->original_Instr = 0;
     return bp->id;
 }
 
@@ -131,7 +131,7 @@ bool debugger_del_breakpoint(DebuggerState *dbg, int id)
         if (dbg->breakpoints[i].id == id) {
             // TODO: 恢复原始指令
             // mmu_write_32(dbg->mmu, dbg->pmem, dbg->breakpoints[i].addr,
-            //              dbg->breakpoints[i].original_insn, dbg->cpu->priv);
+            //              dbg->breakpoints[i].original_Instr, dbg->cpu->priv);
             // 移除：将末尾元素移到当前位置
             dbg->breakpoints[i] = dbg->breakpoints[--dbg->bp_count];
             return true;
