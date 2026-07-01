@@ -3,12 +3,16 @@
         {
             "name": "RISC-V Simulator",
             "includePath": [
+                "${workspaceFolder}/src/include/**",
                 "${workspaceFolder}/docs/参考项目结构1/include/**"
             ],
             "defines": [],
-            "compilerPath": "",
+            "compilerPath": "C:/msys64/mingw64/bin/gcc.exe",
             "cStandard": "c17",
-            "intelliSenseMode": "windows-gcc-x86"
+            "intelliSenseMode": "windows-gcc-x64",
+            "compilerArgs": [
+                "-m32"
+            ]
         }
     ],
     "version": 4
