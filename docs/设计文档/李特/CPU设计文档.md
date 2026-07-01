@@ -306,6 +306,7 @@ void cpu_reset(CPU *cpu);   // 重置：同 init
 | 7 | `EXC_STORE_ADDR_MISALIGNED` | Store 地址未对齐 |
 | 8 | `EXC_STORE_ACCESS_FAULT` | Store 指令访存失败 |
 | 11 | `EXC_ECALL_M` | ecall 指令（系统调用） |
+| 12 | `EXC_PAGE_FAULT_INST` | 取指页错误（Sv32 模式下 MMU 翻译失败） |
 | 13 | `EXC_PAGE_FAULT_LOAD` | Load 页错误（Sv32 模式） |
 | 15 | `EXC_PAGE_FAULT_STORE` | Store 页错误（Sv32 模式） |
 
@@ -604,7 +605,7 @@ RISC-V 指令只有 6 种格式，解码逻辑是一个按 opcode 分发的 swit
 | opcode (hex) | 格式 | 指令类型 | 说明 |
 |-------------|------|---------|------|
 | `0x33` | R-type | OP | 寄存器间运算 (add, sub, sll, slt, xor, srl, sra, or, and) |
-| `0x3B` | R-type | OP-32 (M扩展) | 乘除法 (mul, mulh, div, rem 等) |
+| `0x33` | R-type | OP (M扩展, funct7=0x01) | 乘除法 (mul, mulh, div, rem 等) — 注意：M 扩展复用 OP 操作码，通过 funct7=0x01 区分 |
 | `0x13` | I-type | OP-IMM | 立即数运算 (addi, slli, slti, xori, ori, andi 等) |
 | `0x03` | I-type | LOAD | 内存读 (lb, lh, lw, lbu, lhu) |
 | `0x67` | I-type | JALR | 间接跳转 |
@@ -634,8 +635,8 @@ bool cpu_execute(Simulator *sim, DecodedInsn *d, uint32_t *next_pc) {
     uint32_t *r = sim->cpu.regs;
 
     switch (d->opcode) {
-        case 0x33:  // OP (R-type)
-        case 0x3B:  // OP-32 (M 扩展)
+        case 0x33:  // OP (R-type，含基础整数和 M 扩展)
+            // funct7=0x00: 基础整数运算; funct7=0x20: SUB/SRA; funct7=0x01: M 扩展乘除法
             switch (d->funct3) {
                 case 0x0:  // ADD / SUB / MUL
                     if      (d->funct7 == 0x00) r[d->rd] = r[d->rs1] + r[d->rs2];
@@ -759,8 +760,8 @@ sim_step() 被调用:
         │         a0 (x10) = 实际读取字节数
         │
         └── a7 (x17) == SYS_brk (214)
-                → 调用 mem_brk(&sim->pmem, new_brk) 扩展堆
-                （注意：brk 是物理内存层操作，不经过 MMU 翻译）
+                → 调用 mmu_brk(&sim->mmu, &sim->pmem, new_brk) 扩展堆
+                （brk 最终操作物理内存，但 CPU 通过 MMU 层包装间接调用，保持规则绝对性）
                 a0 (x10) = 新的 brk 地址
 ```
 
@@ -771,13 +772,15 @@ sim_step() 被调用:
         │
         ├── 遍历 sim->breakpoints[]
         │   ├── 当前 PC 在断点列表中
-        │   │       → 恢复原始指令（Debugger 事前替换成了 ebreak）
-        │   │       → PC -= 4（回退到断点指令位置）
+        │   │       → 恢复原始指令: mmu_write_32(addr, bp->original_insn)
+        │   │       → *next_pc = pc（不前进 PC，停在断点地址）
         │   │       → cpu.running = false
         │   │       → 控制权交给 Debugger REPL
+        │   │       （Debugger continue 时：单步执行原始指令 → PC 自然越过断点 → 重新插入 ebreak）
         │   │
-        │   └── 当前 PC 不在断点列表中
-        │           → 模拟器内部错误，打印并退出
+        │   └── 当前 PC 不在断点列表中（程序自身的 ebreak）
+        │           → cpu_trap(sim, EXC_BREAKPOINT, pc)
+        │            （若 mtvec=0 → fallback: printf + cpu->running = false）
 ```
 
 #### 时序 4：完整生命周期
@@ -882,7 +885,10 @@ cpu_trap(sim, exc, bad_addr)
   └── pc     = mtvec             // 跳转异常处理程序
 ```
 
-**简化策略**：本阶段遇到异常（段错误、非法指令、页错误等）直接 `printf` 错误信息 + `cpu->running = false` 退出，不实现完整的异常处理程序。CSR 字段保留以备将来扩展。
+**错误处理流程**：MMU 操作失败时返回 `false` + 填充 `*exc`，CPU 检测到后调用 `cpu_trap()` 统一处理：
+  1. 填写 CSR（mepc = pc, mcause = exc, mtval = bad_addr, 更新 mstatus）
+  2. 跳转到 mtvec 指向的异常处理程序（`pc = mtvec & ~0x3u`）
+  3. 若 mtvec 未初始化（为 0）或阶段 1 无异常处理程序，`cpu_trap()` 内 fallback 为 `printf` + `cpu->running = false` 退出
 
 ---
 

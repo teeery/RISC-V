@@ -101,11 +101,11 @@ Debugger 提供一个交互式命令行界面（REPL），提示符为 `(rvsim) 
 | 断点的增删查（操作 `sim->breakpoints[]`） | 指令的取指、译码、执行（CPU — 李特） |
 | 用户交互循环（REPL） | 虚拟地址翻译（MMU — 焕聪） |
 | 寄存器/内存的**查看** | 物理内存的分配与管理（PhysicalMemory — 焕聪） |
-| 执行节奏的控制（`running` / `single_step`） | 系统调用的实现（syscall 独立模块） |
+| 执行节奏的控制（`running` / `single_step`） | 系统调用的实现（内联在 CPU `cpu_execute()` 中 — 李特） |
 | 调用栈的回溯解析 | 异常处理的底层逻辑（`cpu_trap()` — 李特） |
 | ebreak 指令的写入/恢复（通过 `mmu_write_32`） | ebreak 异常触发后的 CSR 填写（CPU — 李特） |
 
-**关键原则：** Debugger **只读不写** CPU 和 Memory 的核心状态。两个例外——① 断点替换时通过 `mmu_write_32` 写入 ebreak 指令（这操作的是 Memory，不是 CPU）；② 通过 `single_step` 和 `running` 标志控制 CPU 执行节奏。
+**关键原则：** Debugger **不修改程序的用户数据**（数据段、栈、堆内容），也**不直接修改 CPU 状态**。合法操作——① 断点替换时通过 `mmu_write_32` 临时修改代码段（写入/恢复 ebreak 指令）；② 通过 `single_step` 和 `running` 标志控制 CPU 执行节奏；③ 通过 `Simulator*` 读取寄存器和内存。
 
 ---
 
@@ -248,31 +248,32 @@ void debugger_print_backtrace(struct Simulator *sim);
 #### 3.2.3 断点命中 → 恢复 → 重新插入 流程
 
 ```
-【CPU 执行到断点地址时 —— 由 sim_step() 内部处理】
+【CPU 执行到断点地址时 —— 在 cpu_execute() 内部处理】
 
 CPU 读到 EBREAK (0x00100073) → 触发 EXC_BREAKPOINT
   ↓
-在 sim_step() 中检查：遍历 sim->breakpoints[0..bp_count-1]
+在 cpu_execute() 中检查：遍历 sim->breakpoints[0..bp_count-1]
   ├── PC 在断点列表中 → 用户设的断点（由 Debugger 的 ebreak 替换触发）
   │    ① 恢复原始指令：
   │       mmu_write_32(&sim->mmu, &sim->pmem, pc,
   │                     bp->original_insn, sim->cpu.priv, &exc);
-  │    ② cpu.running = false，暂停执行
-  │    ③ 打印 "Hit breakpoint at 0x..."
-  │    ④ 打印当前寄存器状态 → 回到 REPL
+  │    ② *next_pc = pc（不前进 PC，停在断点地址）
+  │    ③ cpu.running = false，暂停执行
+  │    ④ 打印 "Hit breakpoint at 0x..."
+  │    ⑤ 打印当前寄存器状态 → 回到 REPL
   │
   └── PC 不在断点列表中 → 程序自身的 ebreak 指令
-        → 当作普通异常处理，或打印 "Program triggered ebreak" 进入调试器
+        → cpu_trap(sim, EXC_BREAKPOINT, pc)（填入 CSR 后跳 mtvec，或 fallback exit）
 
 【用户输入 c / continue 后 —— debugger_continue() 中处理】
 
 ① 当前是否停在断点处？
-   是 → 单步执行一条原始指令（sim_step），让 PC 越过断点地址
+   是 → 单步执行一条原始指令（sim_step），PC 自然从断点地址变为断点地址+4
    否 → 直接继续
-② 重新写入 EBREAK 到所有启用的断点地址（恢复断点）
+② 重新写入 EBREAK 到所有启用的断点地址（恢复断点，以便下次命中）
 ③ sim->cpu.running = true
 ④ while (cpu.running) {
-       sim_step(sim);  // 每条指令执行前会检查 single_step + breakpoint
+       sim_step(sim);
    }
 ⑤ 回到 REPL
 ```
@@ -363,8 +364,10 @@ backtrace 算法：
   ② current_pc = sim->cpu.pc
   ③ 打印 "#0  PC = 0x..." + 反汇编
   ④ depth = 0
-  ⑤ while (current_fp != 0 && current_fp >= 0xBFF00000
-            && current_fp < 0xC0000000 && depth < 64) {
+  ⑤ while (current_fp != 0 && current_fp >= STACK_BASE
+            && current_fp < STACK_TOP && depth < 64) {
+         // STACK_TOP = 0xC0000000, STACK_BASE = 0xBFFC0000
+         // 使用与 Loader 一致的宏常量（见 loader_internal.h）
          ExceptionType exc = EXC_NONE;
          uint32_t ra, prev_fp;
          mmu_read_32(&sim->mmu, &sim->pmem, current_fp + 4, &ra,
@@ -379,7 +382,7 @@ backtrace 算法：
 ```
 
 **注意事项：**
-- 栈区域范围检查：当前 fp 必须在栈区域内（`0xBFF00000` ~ `0xC0000000`，1MB 栈空间）
+- 栈区域范围检查：当前 fp 必须在栈区域内（`STACK_BASE` ~ `STACK_TOP`，256KB 栈空间）。使用 Loader 模块定义的 `STACK_TOP_DEFAULT` 和 `STACK_SIZE_DEFAULT` 宏，与 Loader 保持同步
 - 如果程序编译时未使用帧指针（`-fomit-frame-pointer`），回溯可能不准确——这是已知限制
 - 读取栈帧时使用 `mmu_read_32`，走 MMU 翻译流程
 
@@ -527,19 +530,20 @@ Debugger:
 
 ### 4.3 断点与 CPU 的交互约定
 
-**CPU 侧（`sim_step` 内 ebreak 处理，李特负责）需要做的事情：**
+**CPU 侧（`cpu_execute` 内 ebreak 处理，李特负责）需要做的事情：**
 
 ```
 当 cpu_execute 检测到 ebreak (opcode=0x73, imm=1) 时：
   ① 遍历 sim->breakpoints[0..bp_count-1]，看当前 PC 是否在列表中
   ② 如果在 → 用户断点：
        - 恢复原始指令: mmu_write_32(addr, bp->original_insn)
+       - *next_pc = pc（不前进 PC，停在断点地址）
        - cpu.running = false（暂停执行）
        - 打印 "Hit breakpoint at 0x..."
        - 如果 debug_mode 为 true → 回到 Debugger REPL
   ③ 如果不在 → 程序自身的 ebreak：
-       - 如果 debug_mode → 当作断点，进入 REPL
-       - 否则 → 打印错误并退出
+       - cpu_trap(sim, EXC_BREAKPOINT, pc)
+       - （若 mtvec=0 则 fallback: printf + cpu->running = false）
 ```
 
 **Debugger 侧（`debugger_continue` 内 continue 处理，嘉俊负责）需要做的事情：**

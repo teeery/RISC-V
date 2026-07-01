@@ -180,11 +180,14 @@
 ```c
 // stub_memory.h — 极简假内存，只用来取指令
 // 接口签名与真实的 MMU 层对齐，等焕聪的 Memory 就绪后只需替换函数名
+//
+// ⚠️ 限制：fake_mem 仅 4KB，测试指令序列的地址范围必须在 0x000 ~ 0xFFF 内。
+//    阶段 4 访存测试如果涉及较大地址跨度，需增大数组（如改为 64KB）。
 
 #include "types.h"        // 提供 ExceptionType, PrivilegeLevel
 #include "memory.h"       // 提供 PhysicalMemory
 
-uint8_t fake_mem[4096];
+uint8_t fake_mem[4096];   // ⚠️ 仅 4KB，测试地址勿超过此范围
 PhysicalMemory stub_pmem; // 最小占位
 
 // 把测试指令序列装入"内存"

@@ -213,9 +213,13 @@ bool     mmu_write(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
 
 bool     mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
                       uint8_t flags);
+
+// 堆管理包装 —— CPU 只调 mmu_*，brk 也通过 MMU 层间接调用 mem_brk
+uint32_t mmu_brk(MMUState *mmu, PhysicalMemory *pmem, uint32_t new_brk);
 ```
 
-> **注意**：批量读写 `mmu_read` / `mmu_write` 是会议决定新增的接口，用于 syscall `write`/`read` 场景——从虚拟地址连续读取/写入 `len` 字节。内部实现逐字节调用 `mmu_read_8` / `mmu_write_8`，或优化为按页批量 `memcpy`。
+> **注意**：
+> - 批量读写 `mmu_read` / `mmu_write` 是会议决定新增的接口，用于 syscall `write`/`read` 场景——从虚拟地址连续读取/写入 `len` 字节。内部实现逐字节调用 `mmu_read_8` / `mmu_write_8`，或优化为按页批量 `memcpy`。
 
 ### 3.2 内部实现思路
 
@@ -299,7 +303,7 @@ Sv32 虚拟地址结构:
   │    ├─ V=0 → 页错误                  │
   │    └─ V=1 → 继续                    │
   │ 4. 检查 PDE 是否为叶子节点           │
-  │    ├─ R|W|X != 0 → 可能是 4MB 大页   │
+  │    ├─ R|W|X != 0 → 非规范页表（第一版报页错误，不支持大页）│
   │    └─ R=W=X=0 → 非叶子，指向二级页表  │
   │ 5. 提取 VPN[0] = vaddr[21:12]       │
   │ 6. 读第二级页表: PTE = l2_table[VPN[0]] │
@@ -463,5 +467,5 @@ debugger REPL
 | 页表存储方式 | **独立 malloc**（非复用物理内存） | 简化实现，避免页表自身占用物理地址空间导致的管理复杂度 |
 | 区域重叠检查 | **不做检查** | 由 ELF 加载器保证不重叠；减少运行时开销 |
 | 跨页访存 | **4/2 字节访问不跨页检查**（简化） | 对齐的 4 字节访问天然不跨页；未对齐访问在 RISC-V 中是合法但可选的，简化实现假设对齐 |
-| 大页支持 | **第一版不支持** | 4MB 大页在第一级 PDE 设置 R/W/X 即可，但标准测试程序不使用大页 |
+| 大页支持 | **第一版不支持** | 第一级 PDE 如果 R/W/X != 0 视为非法（非规范页表），`mmu_translate` 返回 false + `EXC_PAGE_FAULT_*`。标准测试程序不使用大页，后续可扩展 |
 | 线程安全 | **不考虑** | 单核模拟器，所有访问串行化 |
