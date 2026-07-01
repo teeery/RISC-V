@@ -3,6 +3,8 @@
 > 作者：嘉华
 > 模块：loader
 > 参考项目结构：参考项目结构1
+> 合约头文件：`src/include/loader/elf_loader.h`（对齐 [并行开发方案 §0.8](../共同部分/并行开发与验收方案.md#08-loaderelf_loaderh)）
+> 并行开发轨道：[§2C](../共同部分/并行开发与验收方案.md#2c-嘉华loader-模块elf-解析与加载)
 
 ---
 
@@ -77,9 +79,9 @@ C 源码 → 汇编 → 机器码 → ELF 文件 → ★ Loader → 物理内存
 ### 3.0 文件规划（重要：头文件与实现分离，模块内部解耦）
 
 ```
-src/include/elf_loader.h          ← 对外头文件：类型、常量、elf_load() 声明
+src/include/loader/elf_loader.h   ← 合约头文件（对齐并行方案 §0.8 + 文件总览）
 
-src/src/loader/                   ← Loader 模块目录
+src/src/loader/                   ← Loader 实现目录（对齐并行方案 §2C）
   ├── loader_internal.h           ← 内部头文件：各 .c 间共享的函数声明和常量
   ├── elf_validate.c              ← ELF Header 校验（纯逻辑，无副作用）
   ├── elf_segment.c               ← 段加载（权限转换、数据搬运、.bss 清零）
@@ -467,31 +469,82 @@ src/src/loader/
 
 ## 6. 测试计划
 
-### 单元测试（LOADER 独立测试）
+> 对齐 [并行开发方案 §2C](../共同部分/并行开发与验收方案.md#2c-嘉华loader-模块elf-解析与加载)，
+> 使用 Stub PhysicalMemory + Stub MMU 独立测试，不依赖其他队友的模块。
+
+### 测试目录
+
+```
+test/loader/
+├── gen_minimal_elf.c     ← ELF 生成工具（在 x86 宿主机上运行，产出 minimal.elf）
+├── test_validate.c       ← L1：校验测试
+├── test_load.c           ← L2：加载测试
+└── test_stack.c          ← L3：栈测试
+```
+
+### 测试 ELF 文件的生成（方式 A：手写最小 ELF）
+
+不需要 RISC-V 交叉编译器。写一个 C 程序在宿主机上生成最小合法 ELF32 文件：
+
+```
+test/loader/gen_minimal_elf.c
+  → 编译：gcc gen_minimal_elf.c -o gen_minimal_elf
+  → 运行：./gen_minimal_elf
+  → 产出：minimal.elf（内容：addi a0, zero, 42; ecall）
+```
+
+> 等交叉编译环境（`riscv64-unknown-elf-gcc`）搭好后，再用方式 B 生成复杂测试用例。
+
+### L1：校验测试（test_validate.c）
+
+**依赖**：无（纯单元测试，不需要 Simulator）
 
 | 测试用例 | 输入 | 预期结果 |
 |----------|------|---------|
-| 正常 ELF32 | `hello.elf`（标准 RISC-V 32 位可执行文件） | 返回 `true`，打印 loaded 信息，`entry` 有值 |
-| 文件不存在 | `nonexistent.elf` | 返回 `false`，`perror` 输出 |
-| 非 ELF 文件 | 普通 `.txt` 文件 | 返回 `false`，"Not a valid ELF file" |
-| 64 位 ELF | 用 `-march=rv64` 编译的 ELF | 返回 `false`，"Only ELF32 is supported" |
-| 大端序 ELF | 大端序 ELF（如果有） | 返回 `false`，"Only little-endian is supported" |
-| x86 二进制 | 任意 x86 ELF | 返回 `false`，"Not a RISC-V binary" |
-| 可重定位文件（.o） | `gcc -c` 产生的 `.o` 文件 | 返回 `false`，"Not an executable file" |
-| 段超内存 | `paddr + p_memsz > 128MB` 的 ELF | 返回 `false`，"Segment exceeds physical memory" |
+| 合法 ELF32 RISC-V 可执行文件 | `minimal.elf` | `elf_validate_header()` 返回 `true` |
+| 不是 ELF 文件（magic 错） | 伪造的 `e_ident` | 返回 `false`，"Not a valid ELF file" |
+| 64 位 ELF | `e_ident[4] = 2` | 返回 `false`，"Only ELF32 is supported" |
+| 大端序 ELF | `e_ident[5] = 2` | 返回 `false`，"Only little-endian is supported" |
+| 不是 RISC-V | `e_machine = 62` (x86) | 返回 `false`，"Not a RISC-V binary" |
+| 不是可执行文件 | `e_type = 1` (.o 文件) | 返回 `false`，"Not an executable file" |
 
-### 集成测试（LOADER → CPU 联合测试）
+### L2：加载测试（test_load.c）
 
-| 测试用例 | 说明 | 预期结果 |
+**依赖**：Stub PhysicalMemory + Stub MMU（Bare 模式，vaddr = paddr）
+
+| 测试用例 | 说明 | 验收方式 |
 |----------|------|---------|
-| 加载后 CPU 执行 `hello.elf` | Loader 加载 → CPU 从 `entry` 开始执行 | 程序正常 exit |
-| 加载后检查栈 | Loader 加载后检查 `stack_top` 值 | `0xC0000000`，栈区域已映射 |
-| .bss 清零验证 | 写一个有全局变量的 C 程序，编译后加载 | 全局变量初始值为 0 |
+| 加载 minimal.elf | `elf_load()` 返回 `true` | `entry` 非零，`stack_top = 0xC0000000` |
+| 段数据在内存正确位置 | `mmu_read_32(pmem, entry, &insn)` | 读到的指令 = ELF 第一条指令的编码 |
+| .bss 清零验证 | 写一个有 .bss 段的 ELF | .bss 区域全部为 0 |
+| 栈区域可读写 | 向 `stack_top - 4` 写 `0xCAFEBABE` 再读回 | 读回值 = `0xCAFEBABE` |
+| 文件不存在 | `elf_load("nonexistent", ...)` | 返回 `false` |
+| 段超物理内存 | 段地址 + 大小 > 128MB | 返回 `false` |
+
+### L3：栈测试（test_stack.c）
+
+**依赖**：Stub PhysicalMemory + Stub MMU
+
+| 测试用例 | 验收项 |
+|----------|--------|
+| `stack_top` 值 | `= 0xC0000000` |
+| 栈区域大小 | `0xC0000000 - 0xBFFC0000 = 256KB` |
+| 栈区域映射 | `mem_map` 已注册名为 "stack" 的区域 |
+| 栈区域权限 | `MEM_READ | MEM_WRITE`（不可执行） |
+
+### 集成测试（阶段 3，等 CPU 就绪后）
+
+| 步骤 | 说明 | 验收 |
+|------|------|------|
+| 李特用 `sim_load_elf` 替换 `test_load_insns` | ELF → Loader → MMU → CPU → exit | `./rvsim minimal.elf` 返回 42 |
+| 端到端 hello 程序 | 用交叉编译器产出的 hello.elf | 程序正常 exit，输出 "Hello, RISC-V!" |
 
 ### 调试辅助
 
 Loader 加载成功后应打印：
 ```
-ELF loaded: entry=0x000100b0, stack=0xc0000000
+ELF loaded: minimal.elf
+  Entry:  0x000100b0
+  Stack:  0xc0000000 (size: 256 KB)
 ```
-（具体 entry 值取决于链接脚本，示例中使用 `riscv32-unknown-elf-gcc` 默认链接脚本的典型值）
+（具体 entry 值取决于 ELF 的链接脚本）
