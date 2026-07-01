@@ -54,7 +54,7 @@ C 源码 → 汇编 → 机器码 → ELF 文件 → ★ Loader → 物理内存
 | 物理内存怎么分配/管理 | 焕聪（memory） | 我只调 `mem_find_free`、`mem_map`，内部维护 `MemoryRegion` 链表是 memory 模块的事 |
 | 虚拟地址到物理地址的翻译 | 焕聪（memory/mmu） | 我只调 `mmu_map_page` 建立映射，Sv32 页表遍历、PTE 操作是 MMU 的事 |
 | CPU 指令执行 | 李特（cpu） | 我只输出 `*entry`，谁来写 `cpu.pc`、怎么取指译码执行，我不管 |
-| 系统调用处理 | 李特/焕聪（cpu/syscall） | `exit`/`write` 等符号在 ELF 里只是字符串，运行时 `ecall` 触发由 syscall 模块接管 |
+| 系统调用处理 | 李特（CPU） | `exit`/`write` 等符号在 ELF 里只是字符串，运行时 `ecall` 触发由 `cpu_execute()` 中的 ecall case 处理 |
 | 调试器 | 嘉俊（debugger） | 断点、单步、寄存器查看，我不参与 |
 
 ### 错误处理
@@ -206,8 +206,8 @@ typedef int32_t  Elf32_Sword;   // 32 位有符号字
 
 栈常量（在 `src/src/loader/loader_internal.h` 中定义）：
 ```c
-#define STACK_TOP_DEFAULT   0xC0000000       // 对齐焕聪 memory 设计
-#define STACK_SIZE_DEFAULT  (256 * 1024)     // 256KB
+#define STACK_TOP_DEFAULT   0xC0000000      // 栈顶，和团队结论7一致
+#define STACK_SIZE_DEFAULT  (256 * 1024)     // 256KB (0x40000)，栈范围 0xBFFC0000 ~ 0xC0000000
 ```
 
 ### 3.2 内部实现思路
@@ -305,6 +305,8 @@ elf_load_segment(fp, phdr, pmem, mmu)
 | 优点 | 简单，快速跑通 | 真实模拟，支持多进程、页保护 |
 | 缺点 | 地址必须不重叠，无页保护 | 需要 MMU 模块先实现好 |
 
+> ⚠️ **重要限制**：简化版不调用 `mmu_map_page` 建立页表映射，因此 **只能在 Bare 模式（satp.MODE=0）下运行**。如果 MMU 启用了 Sv32 模式（satp.MODE=1），CPU 通过 `mmu_read_32` 取指时会因页表为空而失败（触发 `EXC_PAGE_FAULT_INST`）。在焕聪的 MMU 模块就绪前，确保 `mmu_init` 将 `satp` 设为 `SATP_MODE_OFF`（0），这样 `mmu_translate` 走 Bare 模式，`vaddr == paddr`，简化版即可正常工作。
+
 **建议：先用简化版把流程跑通，等焕聪的 MMU 模块就绪后再切换到完善版。**
 
 #### 关键设计决策
@@ -319,7 +321,7 @@ elf_load_segment(fp, phdr, pmem, mmu)
 4. 加载完成后 `free`，内存峰值 = 最大段大小（通常 < 1MB）
 
 **为什么栈放在 `0xC0000000`？**
-对齐焕聪 memory 设计文档中的内存布局（栈顶 `0xC0000000`，栈底 `0xBFFC0000` = 栈顶 - 256KB）。`0xC0000000` 接近真实 Linux 用户空间顶部（3GB 位置），留给代码/数据/堆从低地址向上增长足够空间。
+这是团队讨论结论（结论 7），和参考项目 2 一致。`0xC0000000` 接近 3GB 位置，更接近真实 Linux 用户空间布局。栈向下增长 256KB，范围 `0xBFFC0000` ~ `0xC0000000`。
 
 **为什么用输出参数而不是返回值？**
 Loader 需要输出两个值（`entry` 和 `stack_top`），但返回值已被占用（表示成功/失败）。用指针输出是 C 的惯用做法，调用者（main.c）这样使用：
@@ -372,7 +374,7 @@ main.c
        ├─ mmu_read_32(&mmu, &pmem, cpu.pc, ...)   ← 通过 MMU 取指令
        ├─ decode(instruction)
        └─ execute(...)
-            ├─ 可能触发 syscall → syscall 模块处理
+            ├─ 可能触发 ecall → cpu_execute() 内 syscall case 处理
             └─ 可能命中断点 → debugger 模块接管（嘉俊）
     }
 ```
@@ -457,9 +459,9 @@ src/src/loader/
 | 6 | `cpu.pc` 和 `cpu.regs[REG_SP]` 字段确认存在 | 李特 | types.h:117-118 |
 | 7 | `REG_SP` = 2 已在 types.h 枚举中定义 | 李特 | types.h:35 |
 | 8 | `PhysicalMemory` 的 `size` 字段默认 128MB | 焕聪 | memory.h:28 |
-| 9 | 栈基址 `0xC0000000`，大小 256KB — 是否需要调整？ | 全体讨论 | 暂定 |
-| 10 | 完善版 `mmu_map_page` 标志位用的是 PTE_*（`PTE_READ=1, PTE_WRITE=2, PTE_EXEC=3`）还是 MEM_*？需要统一 | 焕聪 | 待确认 |
-| 11 | `elf_load` 输出了 `entry` 和 `stack_top`，main.c 里谁来写 `cpu.pc` / `cpu.regs[REG_SP]`？ | 李特 | 建议由 main.c 或 simulator 层负责 |
+| 9 | 栈基址 `0xC0000000`，大小 256KB，范围 `0xBFFC0000` ~ `0xC0000000`（团队结论 7） | 全体讨论 | ✅ 已确定 |
+| 10 | `mmu_map_page` 标志位使用 PTE_*（`PTE_VALID=1, PTE_READ=2, PTE_WRITE=4, PTE_EXEC=8, PTE_USER=16`），与 MEM_* 值不同，需通过 `mem_perm_to_pte_flags()` 转换（见公共类型定义） | 焕聪 | ✅ 已确定 |
+| 11 | `elf_load` 输出了 `entry` 和 `stack_top`，main.c 里谁来写 `cpu.pc` / `cpu.regs[REG_SP]`？ | 李特 | ✅ 已确定：由 main.c 或 `sim_load_elf` 负责写入（见讨论清单结论 7） |
 
 ---
 
@@ -490,6 +492,6 @@ src/src/loader/
 
 Loader 加载成功后应打印：
 ```
-ELF loaded: entry=0x000100b0, stack=0x7ffff000
+ELF loaded: entry=0x000100b0, stack=0xc0000000
 ```
 （具体 entry 值取决于链接脚本，示例中使用 `riscv32-unknown-elf-gcc` 默认链接脚本的典型值）
