@@ -1,0 +1,15 @@
+{
+    "configurations": [
+        {
+            "name": "RISC-V Simulator",
+            "includePath": [
+                "${workspaceFolder}/docs/参考项目结构1/include/**"
+            ],
+            "defines": [],
+            "compilerPath": "",
+            "cStandard": "c17",
+            "intelliSenseMode": "windows-gcc-x86"
+        }
+    ],
+    "version": 4
+}
