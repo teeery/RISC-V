@@ -363,7 +363,7 @@ backtrace 算法：
   ② current_pc = sim->cpu.pc
   ③ 打印 "#0  PC = 0x..." + 反汇编
   ④ depth = 0
-  ⑤ while (current_fp != 0 && current_fp >= 0xBFF00000
+  ⑤ while (current_fp != 0 && current_fp >= 0xBFFC0000
             && current_fp < 0xC0000000 && depth < 64) {
          ExceptionType exc = EXC_NONE;
          uint32_t ra, prev_fp;
@@ -379,7 +379,7 @@ backtrace 算法：
 ```
 
 **注意事项：**
-- 栈区域范围检查：当前 fp 必须在栈区域内（`0xBFF00000` ~ `0xC0000000`，1MB 栈空间）
+- 栈区域范围检查：当前 fp 必须在栈区域内（`0xBFFC0000` ~ `0xC0000000`，256KB 栈空间）
 - 如果程序编译时未使用帧指针（`-fomit-frame-pointer`），回溯可能不准确——这是已知限制
 - 读取栈帧时使用 `mmu_read_32`，走 MMU 翻译流程
 
