@@ -125,30 +125,7 @@ typedef struct {
 } DecodedInstruction;
 
 /* ============================================================
- * 5. CPU 状态（结论 4：最小 CSR 集合）
- *
- * 注意：
- *   - 结构体名统一为 CPU（非 CPUState）
- *   - next_pc 不在此处，通过 cpu_execute 的 uint32_t *next_pc 输出参数传递
- *   - x0 硬连线保护在 cpu_execute 末尾强制执行 regs[0] = 0
- * ============================================================
- */
-typedef struct {
-    uint32_t regs[REG_COUNT];   // 32 个通用寄存器 (x0-x31)
-    uint32_t pc;                // 程序计数器
-    bool     running;           // 运行标志
-    PrivilegeLevel priv;        // 当前特权级
-
-    /* M 模式 CSR（最小集合，结论 4） */
-    uint32_t mstatus;   // 机器状态 (MIE, MPIE, MPP)
-    uint32_t mtvec;     // 陷阱向量基址
-    uint32_t mepc;      // 异常返回地址
-    uint32_t mcause;    // 异常原因
-    uint32_t mtval;     // 异常附加信息
-} CPU;
-
-/* ============================================================
- * 6. 内存访问宽度
+ * 5. 内存访问宽度
  * ============================================================
  */
 typedef enum {
