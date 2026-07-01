@@ -54,12 +54,18 @@
 1. 定义 `CPU` 结构体：
    ```c
    typedef struct {
-       uint32_t regs[32];   // 通用寄存器 x0-x31
-       uint32_t pc;         // 程序计数器
-       bool     running;    // 运行标志
+       uint32_t regs[32];       // 通用寄存器 x0-x31
+       uint32_t pc;             // 程序计数器
+       bool     running;        // 运行标志
+       PrivilegeLevel priv;     // 当前特权级（始终为 PRIV_MACHINE）
+       uint32_t mstatus;        // 机器状态（MIE/MPIE/MPP）
+       uint32_t mtvec;          // 陷阱向量基址
+       uint32_t mepc;           // 异常返回地址
+       uint32_t mcause;         // 异常原因
+       uint32_t mtval;          // 异常相关信息
    } CPU;
    ```
-2. 实现 `cpu_init(CPU *cpu)`：全部字段置零
+2. 实现 `cpu_init(CPU *cpu)`：regs 清零，pc=0，running=false，priv=PRIV_MACHINE，CSR 清零
 3. 实现 `cpu_reset(CPU *cpu)`：与 init 等价（预留后续扩展空间）
 
 ### 为什么放第一
@@ -76,6 +82,8 @@
 | `regs[0]` ~ `regs[31]` | 全部为 0 |
 | `pc` | 0 |
 | `running` | false |
+| `priv` | `PRIV_MACHINE` (3) |
+| `mstatus` / `mtvec` / `mepc` / `mcause` / `mtval` | 全部为 0 |
 
 - `cpu_reset` 后的状态与 `cpu_init` 完全一致
 
@@ -171,18 +179,25 @@
 
 ```c
 // stub_memory.h — 极简假内存，只用来取指令
+// 接口签名与真实的 MMU 层对齐，等焕聪的 Memory 就绪后只需替换函数名
+
+#include "types.h"        // 提供 ExceptionType, PrivilegeLevel
+#include "memory.h"       // 提供 PhysicalMemory
 
 uint8_t fake_mem[4096];
+PhysicalMemory stub_pmem; // 最小占位
 
 // 把测试指令序列装入"内存"
-static inline void mem_load(uint32_t addr, const uint32_t *insns, int count) {
+static inline void stub_mem_load(uint32_t addr, const uint32_t *insns, int count) {
     memcpy(&fake_mem[addr], insns, count * 4);
 }
 
-// CPU 取指令时调这个
-int stub_mmu_read32(void *mmu, uint32_t addr, uint32_t *val) {
-    memcpy(val, &fake_mem[addr], 4);
-    return 0;
+// CPU 取指令时调这个（签名与 mmu_read_32 对齐）
+bool stub_mmu_read_32(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
+                      uint32_t *val, PrivilegeLevel priv, ExceptionType *exc) {
+    (void)mmu; (void)pmem; (void)priv; (void)exc;
+    memcpy(val, &fake_mem[vaddr], 4);
+    return true;
 }
 ```
 
@@ -273,20 +288,26 @@ LOAD/STORE 的地址计算：`addr = regs[rs1] + imm`（其中 STORE 的 imm 使
 ### 扩展 Memory Stub（加入写入能力）
 
 ```c
-// 在原有 stub_mmu_read32 基础上，增加：
-int stub_mmu_read16(void *mmu, uint32_t addr, uint32_t *val) {
+// 在原有 stub_mmu_read_32 基础上，增加（签名全部与真实 MMU 层对齐）：
+bool stub_mmu_read_16(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
+                      uint16_t *val, PrivilegeLevel priv, ExceptionType *exc) {
+    (void)mmu; (void)pmem; (void)priv; (void)exc;
     uint16_t tmp;
-    memcpy(&tmp, &fake_mem[addr], 2);
+    memcpy(&tmp, &fake_mem[vaddr], 2);
     *val = tmp;
-    return 0;
+    return true;
 }
-int stub_mmu_read8(void *mmu, uint32_t addr, uint32_t *val) {
-    *val = fake_mem[addr];
-    return 0;
+bool stub_mmu_read_8(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
+                     uint8_t *val, PrivilegeLevel priv, ExceptionType *exc) {
+    (void)mmu; (void)pmem; (void)priv; (void)exc;
+    *val = fake_mem[vaddr];
+    return true;
 }
-int stub_mmu_write32(void *mmu, uint32_t addr, uint32_t val) {
-    memcpy(&fake_mem[addr], &val, 4);
-    return 0;
+bool stub_mmu_write_32(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
+                       uint32_t val, PrivilegeLevel priv, ExceptionType *exc) {
+    (void)mmu; (void)pmem; (void)priv; (void)exc;
+    memcpy(&fake_mem[vaddr], &val, 4);
+    return true;
 }
 // write16, write8 同理
 ```
@@ -305,7 +326,7 @@ int stub_mmu_write32(void *mmu, uint32_t addr, uint32_t val) {
 
 ### 独立性
 
-⚠️ 需要 Memory Stub 支持读写（~25 行）。等焕聪的 Memory 就绪后，只需把 `stub_mmu_read32` 替换为 `mmu_read32` 等真实接口。
+⚠️ 需要 Memory Stub 支持读写（~25 行）。等焕聪的 Memory 就绪后，只需把 `stub_mmu_read_32` 替换为 `mmu_read_32` 等真实接口。
 
 ---
 
@@ -503,7 +524,7 @@ test/
 | 你的阶段 | 需要队友提供的接口 | 何时可对接 |
 |----------|-------------------|-----------|
 | 阶段 0–3 | 无 | 立即开始 |
-| 阶段 4 | Memory: `mmu_read32/write32/read16...` | Memory Stub → 替换为焕聪的真实接口 |
+| 阶段 4 | Memory: `mmu_read_32 / mmu_write_32 / mmu_read_16 / mmu_write_16 / mmu_read_8 / mmu_write_8` | Memory Stub → 替换为焕聪的真实接口 |
 | 阶段 5 | 同上 + syscall 写 stdout 需要 Debugger 确认格式 | 先用自己的 syscall 实现 |
 | 阶段 7 | Debugger: 确认 `cpu_disasm` 的输出格式是否匹配 `x` 命令 | 反汇编格式与 Debugger 约定一致 |
 | 最终联调 | Loader 设置 `sim->cpu.pc` 和 `regs[2]`（栈指针） | 阶段 0–5 完成后可与嘉华 + 焕聪联调 |

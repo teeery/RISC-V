@@ -98,7 +98,7 @@ RISC-V 程序眼中的虚拟地址空间（32位）：
            │  （空闲空间）
            │     ↑↑↑
            │
-0xBFFF0000 ├────────── 栈（向下增长）  R+W    ← Region[2]
+0xBFFC0000 ├────────── 栈（向下增长）  R+W    ← Region[2]
 0xC0000000 └────────── 栈顶 (初始 sp)
 ═══════════════════════════════════════════════
 ```
@@ -194,17 +194,17 @@ bool     mmu_translate(MMUState *mmu, uint32_t vaddr, uint32_t *paddr,
                        ExceptionType *exc);
 
 bool     mmu_read_8 (MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                     uint8_t *val, PrivilegeLevel priv);
+                     uint8_t *val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_read_16(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                     uint16_t *val, PrivilegeLevel priv);
+                     uint16_t *val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_read_32(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                     uint32_t *val, PrivilegeLevel priv);
+                     uint32_t *val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_write_8 (MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                      uint8_t val, PrivilegeLevel priv);
+                      uint8_t val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_write_16(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                      uint16_t val, PrivilegeLevel priv);
+                      uint16_t val, PrivilegeLevel priv, ExceptionType *exc);
 bool     mmu_write_32(MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
-                      uint32_t val, PrivilegeLevel priv);
+                      uint32_t val, PrivilegeLevel priv, ExceptionType *exc);
 
 bool     mmu_read (MMUState *mmu, PhysicalMemory *pmem, uint32_t vaddr,
                    uint8_t *buf, uint32_t len, PrivilegeLevel priv, ExceptionType *exc);
@@ -371,7 +371,7 @@ main()
   │   ├─ 遍历 Program Headers (PT_LOAD):
   │   │   ├─ mem_map(&pmem, vaddr, memsz, flags, name)  ← 注册区域
   │   │   └─ mem_load(&pmem, vaddr, data, filesz)       ← 拷贝段数据
-  │   └─ mem_map(&pmem, 0xBFFF0000, 64KB, R|W, "stack") ← 设置栈区域
+  │   └─ mem_map(&pmem, 0xBFFC0000, 0x40000, MEM_READ | MEM_WRITE, "stack") ← 设置栈区域（256KB）
   │
   ├─ cpu.pc = elf_entry
   └─ cpu.regs[sp] = 栈顶

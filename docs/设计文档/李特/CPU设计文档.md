@@ -294,15 +294,20 @@ void cpu_reset(CPU *cpu);   // 重置：同 init
 
 本阶段关注的异常码：
 
-| Code | 名称 | 触发场景 |
+| Code | 枚举名 | 触发场景 |
 |------|------|---------|
-| 0 | 无异常 | 正常执行 |
-| 2 | InstAccessFault | 取指时 MMU 翻译失败 |
-| 3 | IllegalInst | 未知操作码 |
-| 4 | Breakpoint | ebreak 指令（断点） |
-| 5 | LoadAccessFault | Load 指令访存失败 |
-| 7 | StoreAccessFault | Store 指令访存失败 |
-| 11 | ECALL from M-mode | ecall 指令（系统调用） |
+| 0 | `EXC_NONE` | 正常执行 |
+| 1 | `EXC_INST_ADDR_MISALIGNED` | 指令地址未对齐 |
+| 2 | `EXC_INST_ACCESS_FAULT` | 取指时 MMU 翻译失败 |
+| 3 | `EXC_ILLEGAL_INST` | 未知操作码 |
+| 4 | `EXC_BREAKPOINT` | ebreak 指令（断点） |
+| 5 | `EXC_LOAD_ADDR_MISALIGNED` | Load 地址未对齐 |
+| 6 | `EXC_LOAD_ACCESS_FAULT` | Load 指令访存失败 |
+| 7 | `EXC_STORE_ADDR_MISALIGNED` | Store 地址未对齐 |
+| 8 | `EXC_STORE_ACCESS_FAULT` | Store 指令访存失败 |
+| 11 | `EXC_ECALL_M` | ecall 指令（系统调用） |
+| 13 | `EXC_PAGE_FAULT_LOAD` | Load 页错误（Sv32 模式） |
+| 15 | `EXC_PAGE_FAULT_STORE` | Store 页错误（Sv32 模式） |
 
 **mtval —— 陷阱值**
 
@@ -581,9 +586,8 @@ void cpu_trap(Simulator *sim, ExceptionType exc, uint32_t tval) {
 
 ```c
 void cpu_init(CPU *cpu) {
-    memset(cpu->regs, 0, sizeof(cpu->regs));
-    cpu->pc     = 0;
-    cpu->running = false;
+    memset(cpu, 0, sizeof(CPU));
+    cpu->priv = PRIV_MACHINE;  // 模拟器始终运行在 M-mode
 }
 
 void cpu_reset(CPU *cpu) {
@@ -792,7 +796,7 @@ sim_step() 被调用:
     │   │   │   ├── mem_map(&pmem, paddr, size, flags, name)   // 注册物理区域
     │   │   │   ├── mem_load(&pmem, paddr, data, size)          // 拷段数据
     │   │   │   └── mmu_map_page(&mmu, vaddr, paddr, flags)     // 建立虚拟→物理映射
-    │   │   └── mem_map(&pmem, 0xBF000000, 1MB, R|W, "stack")  // 栈区域
+    │   │   └── mem_map(&pmem, 0xBFFC0000, 0x40000, MEM_READ | MEM_WRITE, "stack")  // 栈区域（256KB）
     │   ├── sim->cpu.pc = entry                                // Loader → CPU
     │   └── sim->cpu.regs[2] = 0xC0000000                      // 栈顶 sp
     │
