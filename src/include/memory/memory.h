@@ -28,11 +28,6 @@
 
 #define MEM_SIZE_DEFAULT    (128 * 1024 * 1024)  // 128 MB
 
-/* 内存区域权限标志（PhysicalMemory 层使用，位掩码） */
-#define MEM_READ   (1 << 0)
-#define MEM_WRITE  (1 << 1)
-#define MEM_EXEC   (1 << 2)
-
 /* 内存区域描述符 */
 typedef struct {
     uint32_t base;      // 起始物理地址

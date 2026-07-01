@@ -43,23 +43,8 @@
  * ============================================================
  */
 
-#define PAGE_SIZE        4096
-#define PAGE_SHIFT       12
 #define VPN0_SHIFT       12
 #define VPN1_SHIFT       22
-
-/* PTE 标志位（MMU 层使用，与 RISC-V 规范一致） */
-#define PTE_VALID        (1 << 0)
-#define PTE_READ         (1 << 1)
-#define PTE_WRITE        (1 << 2)
-#define PTE_EXEC         (1 << 3)
-#define PTE_USER         (1 << 4)
-#define PTE_GLOBAL       (1 << 5)
-#define PTE_ACCESSED     (1 << 6)
-#define PTE_DIRTY        (1 << 7)
-
-#define SATP_MODE_OFF    0   // Bare：无地址翻译
-#define SATP_MODE_SV32   1   // Sv32：两级页表
 
 /* MMU 状态 */
 typedef struct {

@@ -149,7 +149,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdio.h>
 
 /* ── 公共类型 & 依赖模块（对齐并行开发方案 §0.8 合约）────────────
  *

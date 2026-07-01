@@ -5,22 +5,25 @@
 #include <stdbool.h>
 
 /* ============================================================
- * types.h — 公共类型定义
+ * types.h — 公共基础类型、枚举、常量
  *
- * 所有模块共享的基础类型：寄存器索引、异常类型、特权级、
- * 指令解码结构体、CPU 状态结构体。
+ * 这是全项目最底层的公共基础，零依赖（只依赖 C 标准库）。
+ * 所有模块的头文件都 include 它。
  *
- * 设计决策（见 讨论清单.md 结论 4）：
- *   - CPU 结构体名统一为 CPU（非 CPUState）
- *   - 包含最小 CSR 集合（mstatus / mtvec / mepc / mcause / mtval）
- *   - 暂不包含 mie / mip（单核无外设不需要中断）
- *   - 暂不包含 mscratch（非必需）
- *   - next_pc 通过 cpu_execute 的输出参数传递，不存入 CPU 状态
+ * 放什么：
+ *   - ≥3 个模块都需要的简单类型 / 枚举 / 常量
+ *   - 跨模块的桥接函数（如 mem_perm_to_pte_flags）
+ *
+ * 不放什么：
+ *   - 复杂结构体（即使被多人用）——结构体跟它的函数 API 是一体的，
+ *     放在模块自己的头文件里（如 CPU 在 cpu.h、PhysicalMemory 在 memory.h）
  * ============================================================
  */
 
 /* ============================================================
  * 1. 寄存器 ABI 名称
+ *
+ * 使用者：CPU（regs 数组下标）、Debugger（寄存器显示）、Loader（设 sp）
  * ============================================================
  */
 typedef enum {
@@ -61,6 +64,9 @@ typedef enum {
 
 /* ============================================================
  * 2. 特权级
+ *
+ * 使用者：CPU（cpu.priv）、MMU（地址翻译时检查 U 位）、
+ *         Debugger（显示当前特权级）、Loader（不直接使用，但通过接口传递）
  * ============================================================
  */
 typedef enum {
@@ -70,68 +76,97 @@ typedef enum {
 } PrivilegeLevel;
 
 /* ============================================================
- * 3. 异常 / 中断类型（RISC-V 特权规范）
+ * 3. 异常类型（RISC-V 特权规范 §3.1.15 mcause）
  *
- * MMU 层通过 ExceptionType *exc 输出参数报告错误：
- *   - EXC_NONE              (-1)  无异常
- *   - EXC_LOAD_ACCESS_FAULT  (5)  页错误 / 越权（读）
- *   - EXC_STORE_ACCESS_FAULT (7)  页错误 / 越权（写）
- *   - EXC_INSTR_ACCESS_FAULT (1)  取指页错误
- *   - EXC_ILLEGAL_INSTRUCTION(2)  非法指令
- *   - EXC_BREAKPOINT         (3)  ebreak / 断点
+ * 使用者：MMU（翻译失败时填充 *exc）、CPU（cpu_trap 填写 mcause）、
+ *         Debugger（显示异常信息）
+ *
+ * 值对齐 RISC-V 规范：异常码从 0 开始。
+ * EXC_NONE = 0 表示无异常（mcause 寄存器的复位值）。
  * ============================================================
  */
 typedef enum {
-    EXC_NONE                    = -1,
-    EXC_INSTR_ADDR_MISALIGNED   = 0,
-    EXC_INSTR_ACCESS_FAULT      = 1,
-    EXC_ILLEGAL_INSTRUCTION     = 2,
-    EXC_BREAKPOINT              = 3,
-    EXC_LOAD_ADDR_MISALIGNED    = 4,
-    EXC_LOAD_ACCESS_FAULT       = 5,
-    EXC_STORE_ADDR_MISALIGNED   = 6,
-    EXC_STORE_ACCESS_FAULT      = 7,
-    EXC_ECALL_FROM_U            = 8,
-    EXC_ECALL_FROM_S            = 9,
-    EXC_ECALL_FROM_M            = 11,
+    EXC_NONE                    = 0,
+    EXC_INST_ADDR_MISALIGNED    = 1,   // 指令地址未对齐
+    EXC_INST_ACCESS_FAULT       = 2,   // 取指访问错误（页错误 / 越权）
+    EXC_ILLEGAL_INST            = 3,   // 非法指令
+    EXC_BREAKPOINT              = 4,   // 断点 (ebreak)
+    EXC_LOAD_ADDR_MISALIGNED    = 5,   // Load 地址未对齐
+    EXC_LOAD_ACCESS_FAULT       = 6,   // Load 访问错误
+    EXC_STORE_ADDR_MISALIGNED   = 7,   // Store 地址未对齐
+    EXC_STORE_ACCESS_FAULT      = 8,   // Store 访问错误
+    EXC_ECALL_U                 = 9,   // ECALL from U-mode
+    EXC_ECALL_S                 = 10,  // ECALL from S-mode（保留）
+    EXC_ECALL_M                 = 11,  // ECALL from M-mode
+    EXC_PAGE_FAULT_INST         = 12,  // 取指页错误（Sv32 模式）
+    EXC_PAGE_FAULT_LOAD         = 13,  // Load 页错误（Sv32 模式）
+    EXC_PAGE_FAULT_STORE        = 15,  // Store 页错误（Sv32 模式）
 } ExceptionType;
 
 /* ============================================================
- * 4. 指令解码
+ * 4. 内存权限标志（PhysicalMemory 层使用）
+ *
+ * 使用者：Memory（mem_map flags）、Loader（段加载时设权限）、
+ *         MMU（mmu_map_page 权限转换的输入）
+ *
+ * 注意：这些值和 ELF 的 PF_*（PF_R=4, PF_W=2, PF_X=1）不同！
+ *       Loader 在 elf_load_segment 中做 PF_* → MEM_* 转换。
  * ============================================================
  */
-
-/* 指令格式 */
-typedef enum {
-    FMT_R,      // R-type:  ADD rd, rs1, rs2
-    FMT_I,      // I-type:  ADDI rd, rs1, imm  (含 load / jalr / ecall)
-    FMT_S,      // S-type:  SW rs2, imm(rs1)
-    FMT_B,      // B-type:  BEQ rs1, rs2, imm
-    FMT_U,      // U-type:  LUI rd, imm
-    FMT_J,      // J-type:  JAL rd, imm
-} InstructionFormat;
-
-/* 解码后的指令 */
-typedef struct {
-    uint32_t raw;           // 原始 32 位指令
-    uint8_t  opcode;        // 低 7 位操作码
-    uint8_t  rd;            // 目标寄存器  (5 bits)
-    uint8_t  rs1;           // 源寄存器 1  (5 bits)
-    uint8_t  rs2;           // 源寄存器 2  (5 bits)
-    uint8_t  funct3;        // funct3 字段 (3 bits)
-    uint8_t  funct7;        // funct7 字段 (7 bits, R-type)
-    int32_t  imm;           // 解码后的立即数（已符号扩展）
-    InstructionFormat fmt;  // 指令格式
-} DecodedInstruction;
+#define MEM_READ   (1 << 0)
+#define MEM_WRITE  (1 << 1)
+#define MEM_EXEC   (1 << 2)
 
 /* ============================================================
- * 5. 内存访问宽度
+ * 5. PTE 权限标志（MMU 页表层使用，与 RISC-V 规范一致）
+ *
+ * 使用者：MMU（页表遍历 + 权限校验）、Loader（mmu_map_page 传 flags）
+ *
+ * PTE 格式（32 位）：
+ *   31        20 19        10 9 8 7 6 5 4 3 2 1 0
+ *  ┌────────────┬────────────┬─┬─┬─┬─┬─┬─┬─┬─┬─┬─┐
+ *  │ PPN[1]     │ PPN[0]     │-│D│A│G│U│X│W│R│V│
+ *  └────────────┴────────────┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┘
+ *
+ * 注意：这些值和 MEM_* 的 bit 位置不同！使用 mem_perm_to_pte_flags() 做转换。
  * ============================================================
  */
-typedef enum {
-    WIDTH_BYTE   = 1,
-    WIDTH_HALF   = 2,
-    WIDTH_WORD   = 4,
-} MemAccessWidth;
+#define PTE_VALID    (1 << 0)
+#define PTE_READ     (1 << 1)
+#define PTE_WRITE    (1 << 2)
+#define PTE_EXEC     (1 << 3)
+#define PTE_USER     (1 << 4)
+#define PTE_GLOBAL   (1 << 5)
+#define PTE_ACCESSED (1 << 6)
+#define PTE_DIRTY    (1 << 7)
+
+/* ============================================================
+ * 6. Sv32 页表常量
+ *
+ * 使用者：MMU（页表遍历）、Loader（按页映射段数据）
+ * ============================================================
+ */
+#define PAGE_SIZE       4096
+#define PAGE_SHIFT      12
+#define SATP_MODE_OFF   0    // Bare 模式：vaddr = paddr，不做翻译
+#define SATP_MODE_SV32  1    // Sv32 模式：两级页表翻译
+
+/* ============================================================
+ * 7. MEM_* → PTE_* 权限转换
+ *
+ * 使用者：Loader（elf_load_segment: PF_* → MEM_* → PTE_*）、
+ *         MMU（mmu_map_page 内部也可用）
+ *
+ * 为什么放在 types.h：需要同时看到 MEM_* 和 PTE_* 的值，
+ * types.h 是唯一被两者都 include 的位置。
+ * ============================================================
+ */
+static inline uint8_t mem_perm_to_pte_flags(uint8_t mem_flags) {
+    uint8_t pte = PTE_VALID;  // 所有映射默认有效
+    if (mem_flags & MEM_READ)  pte |= PTE_READ;
+    if (mem_flags & MEM_WRITE) pte |= PTE_WRITE;
+    if (mem_flags & MEM_EXEC)  pte |= PTE_EXEC;
+    return pte;
+}
 
 #endif // TYPES_H
