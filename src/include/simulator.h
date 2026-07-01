@@ -1,7 +1,8 @@
 #ifndef SIMULATOR_H
 #define SIMULATOR_H
 
-#include "types.h"           // CPU, PrivilegeLevel, ExceptionType, RegisterID
+#include "types.h"           // PrivilegeLevel, ExceptionType, RegisterID
+#include "cpu/cpu.h"         // CPU (regs[32], pc, running, priv, CSR)
 #include "memory/memory.h"   // PhysicalMemory, MemoryRegion, mem_*
 #include "memory/mmu.h"      // MMUState, mmu_*
 #include "cpu/decode.h"      // DecodedInsn, cpu_decode, cpu_disasm
