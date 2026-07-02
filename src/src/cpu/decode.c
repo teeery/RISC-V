@@ -97,7 +97,9 @@
 //指令表的结构体（定义"列"）
 typedef struct {
     uint8_t opcode;   // 操作码（低 7 位）
-    uint8_t funct3;   // 功能码 3（3 位，细分指令）
+    int8_t  funct3;   // 功能码 3（3 位，细分指令），-1 表示不关心
+                       //   注意：U-type/J-type 的立即数会"侵占"funct3 位域，
+                       //   所以这 4 条指令（lui/auipc/jal/jalr）的 funct3 必须填 -1
     int8_t  funct7;   // 功能码 7（7 位，进一步细分）——注意：是 int8_t，
                        //   -1 表示"不关心 funct7"，0x00 或 0x20 表示"必须匹配这个值"
     char   *name;     // 指令名字符串（如 "addi"）
@@ -106,12 +108,15 @@ typedef struct {
 //指令表数组（定义"行"）——共 37 条，覆盖全部 RV32I 指令
 static const InstrEntry instr_table[] = {
     // ── U-type：高位立即数 ──────────────────────────
-    { 0x37, 0, -1,    "lui"   },
-    { 0x17, 0, -1,    "auipc" },
+    //   funct3=-1 是因为 U-type 没有 funct3 字段——
+    //   那些 bit 位被立即数占用了，不能按 funct3 去匹配
+    { 0x37, -1, -1,   "lui"   },
+    { 0x17, -1, -1,   "auipc" },
 
     // ── J-type / I-type：跳转 ───────────────────────
-    { 0x6F, 0, -1,    "jal"   },
-    { 0x67, 0, -1,    "jalr"  },
+    //   JAL 同理：J-type 没有 funct3 字段
+    { 0x6F, -1, -1,   "jal"   },
+    { 0x67, -1, -1,   "jalr"  },
 
     // ── B-type：分支（6 条，靠 funct3 区分）─────────
     { 0x63, 0, -1,    "beq"   },
@@ -374,12 +379,13 @@ void cpu_disasm(uint32_t instr, uint32_t pc, char *buf, size_t bufsz)
     //   提示：写一个循环遍历指令表，优先精确匹配 funct7，
     //   其次匹配 funct7==-1 的通配条目
     const char *name = "unknown"; // 默认指令名
-    for(int i=0; i<sizeof(instr_table)/sizeof(instr_table[0]);i++){
-        if(instr_table[i].opcode == d.opcode && instr_table[i].funct3 == d.funct3){
-            if(instr_table[i].funct7 == d.funct7 || instr_table[i].funct7 == -1){
-                name = instr_table[i].name;
-                break;
-            }
+    int table_size = (int)(sizeof(instr_table) / sizeof(instr_table[0]));
+    for (int i = 0; i < table_size; i++) {
+        if (instr_table[i].opcode == d.opcode &&
+            (instr_table[i].funct3 == -1 || instr_table[i].funct3 == (int8_t)d.funct3) &&
+            (instr_table[i].funct7 == -1 || instr_table[i].funct7 == (int8_t)d.funct7)) {
+            name = instr_table[i].name;
+            break;
         }
     }
 
