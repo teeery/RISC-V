@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * breakpoint.h / breakpoint.c — 软件断点管理
  * ============================================================================
  *
@@ -10,7 +10,7 @@
  *
  *   typedef struct {
  *       uint32_t addr;         // 断点地址
- *       uint32_t orig_insn;    // 被替换前的原始指令
+ *       uint32_t orig_Instr;    // 被替换前的原始指令
  *       bool     active;       // 是否活跃
  *   } Breakpoint;
  *
@@ -38,9 +38,9 @@
  *       // 2. 检查是否已有断点在该地址（去重）
  *       // 3. 扩容断点数组（如果需要）
  *       // 4. 保存原始指令：
- *       //    mmu_read32(&sim->mmu, addr, &bp.orig_insn);
+ *       //    mmu_read32(&sim->mmu, addr, &bp.orig_Instr);
  *       // 5. 写入 ebreak：
- *       //    mmu_write32(&sim->mmu, addr, EBREAK_INSN);
+ *       //    mmu_write32(&sim->mmu, addr, EBREAK_Instr);
  *       //    注意：需要检查写入权限，代码段通常是 R+X，可能需要临时改权限
  *       // 6. 设置 bp.addr = addr, bp.active = true
  *       // 7. 返回断点数组索引
@@ -48,12 +48,12 @@
  *
  * ---- 断点命中处理（在 sim_step 中）----
  *
- *   if (insn == EBREAK_INSN) {
+ *   if (Instr == EBREAK_Instr) {
  *       Breakpoint *bp = bp_find(sim, sim->cpu.pc);
  *       if (bp) {
  *           // 这是一个软件断点！
  *           // 1. 恢复原始指令
- *           mmu_write32(&sim->mmu, bp->addr, bp->orig_insn);
+ *           mmu_write32(&sim->mmu, bp->addr, bp->orig_Instr);
  *           // 2. PC 退回到断点地址（因为 ebreak 指令已经消耗了 PC+4）
  *           //    但实际上 PC 还没更新，所以不需要动
  *           // 3. 暂停执行

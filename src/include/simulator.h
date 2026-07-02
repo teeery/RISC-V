@@ -1,10 +1,11 @@
 #ifndef SIMULATOR_H
 #define SIMULATOR_H
 
-#include "types.h"           // CPU, PrivilegeLevel, ExceptionType, RegisterID
+#include "types.h"           // PrivilegeLevel, ExceptionType, RegisterID
+#include "cpu/cpu.h"         // CPU (regs[32], pc, running, priv, CSR)
 #include "memory/memory.h"   // PhysicalMemory, MemoryRegion, mem_*
 #include "memory/mmu.h"      // MMUState, mmu_*
-#include "cpu/decode.h"      // DecodedInsn, cpu_decode, cpu_disasm
+#include "cpu/decode.h"      // DecodedInstr, cpu_decode, cpu_disasm
 
 /* ================================================================
  * simulator.h — 模拟器顶层结构体
@@ -39,7 +40,7 @@
 /* ── 断点结构体 ────────────────────────────────────────────────── */
 typedef struct {
     uint32_t addr;              // 断点地址
-    uint32_t original_insn;     // 被替换前的原始指令（用于恢复）
+    uint32_t original_instr;     // 被替换前的原始指令（用于恢复）
     bool     enabled;           // 是否启用
 } Breakpoint;
 

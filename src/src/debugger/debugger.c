@@ -17,7 +17,7 @@
 
 #define MAX_CMD_LEN  256
 #define MAX_ARGS     8
-#define EBREAK_INSN  0x00100073
+#define EBREAK_INSTR  0x00100073
 
 /* ── 寄存器 ABI 名称表 (x0-x31) ──────────────────────────────── */
 static const char *reg_abi_names[] = {
@@ -160,10 +160,10 @@ void debugger_print_backtrace(struct Simulator *sim)
 
     {
         ExceptionType exc = EXC_NONE;
-        uint32_t insn;
-        if (mmu_read_32(&sim->mmu, &sim->pmem, pc, &insn, sim->cpu.priv, &exc)) {
+        uint32_t instr;
+        if (mmu_read_32(&sim->mmu, &sim->pmem, pc, &instr, sim->cpu.priv, &exc)) {
             char disasm[128];
-            cpu_disasm(insn, pc, disasm, sizeof(disasm));
+            cpu_disasm(instr, pc, disasm, sizeof(disasm));
             printf("  <%s>\n", disasm);
         } else { printf("\n"); }
     }
@@ -182,10 +182,10 @@ void debugger_print_backtrace(struct Simulator *sim)
         printf("#%d  fp=0x%08x  ra=0x%08x", depth, fp, ra);
 
         if (ra >= 4) {
-            uint32_t call_insn;
-            if (mmu_read_32(&sim->mmu, &sim->pmem, ra - 4, &call_insn, sim->cpu.priv, &exc)) {
+            uint32_t call_instr;
+            if (mmu_read_32(&sim->mmu, &sim->pmem, ra - 4, &call_instr, sim->cpu.priv, &exc)) {
                 char disasm[128];
-                cpu_disasm(call_insn, ra - 4, disasm, sizeof(disasm));
+                cpu_disasm(call_instr, ra - 4, disasm, sizeof(disasm));
                 printf("  <%s>\n", disasm);
             } else { printf("\n"); }
         } else { printf("\n"); }
@@ -212,7 +212,7 @@ void debugger_step(struct Simulator *sim)
     if (at_bp) {
         ExceptionType exc = EXC_NONE;
         mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
-                     sim->breakpoints[bp_i].original_insn, sim->cpu.priv, &exc);
+                     sim->breakpoints[bp_i].original_instr, sim->cpu.priv, &exc);
     } else {
         sim->single_step = true;
     }
@@ -222,16 +222,16 @@ void debugger_step(struct Simulator *sim)
     if (at_bp) {
         ExceptionType exc = EXC_NONE;
         mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
-                     EBREAK_INSN, sim->cpu.priv, &exc);
+                     EBREAK_INSTR, sim->cpu.priv, &exc);
     }
 
     {
         ExceptionType exc = EXC_NONE;
-        uint32_t insn;
+        uint32_t instr;
         char disasm[128] = {0};
-        if (mmu_read_32(&sim->mmu, &sim->pmem, pc_before, &insn, sim->cpu.priv, &exc))
-            cpu_disasm(insn, pc_before, disasm, sizeof(disasm));
-        printf("0x%08x: %08x  %s\n", pc_before, insn, disasm);
+        if (mmu_read_32(&sim->mmu, &sim->pmem, pc_before, &instr, sim->cpu.priv, &exc))
+            cpu_disasm(instr, pc_before, disasm, sizeof(disasm));
+        printf("0x%08x: %08x  %s\n", pc_before, instr, disasm);
     }
 }
 
@@ -249,7 +249,7 @@ void debugger_continue(struct Simulator *sim)
         ExceptionType exc = EXC_NONE;
         sim_step(sim);
         mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
-                     EBREAK_INSN, sim->cpu.priv, &exc);
+                     EBREAK_INSTR, sim->cpu.priv, &exc);
     }
 
     printf("Continuing...\n");
@@ -310,7 +310,7 @@ void debugger_run(struct Simulator *sim)
                 if (sim->breakpoints[i].enabled) {
                     ExceptionType exc = EXC_NONE;
                     mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[i].addr,
-                                 sim->breakpoints[i].original_insn, sim->cpu.priv, &exc);
+                                 sim->breakpoints[i].original_instr, sim->cpu.priv, &exc);
                 }
             }
             printf("Exiting...\n");
@@ -411,11 +411,11 @@ void debugger_run(struct Simulator *sim)
                 { fprintf(stderr, "Error: Invalid address\n"); continue; }
             for (int i = 0; i < 8; i++) {
                 ExceptionType exc = EXC_NONE;
-                uint32_t insn;
-                if (!mmu_read_32(&sim->mmu, &sim->pmem, addr + i * 4, &insn, sim->cpu.priv, &exc)) break;
+                uint32_t instr;
+                if (!mmu_read_32(&sim->mmu, &sim->pmem, addr + i * 4, &instr, sim->cpu.priv, &exc)) break;
                 char disasm[128];
-                cpu_disasm(insn, addr + i * 4, disasm, sizeof(disasm));
-                printf("  0x%08x: %08x  %s\n", addr + i * 4, insn, disasm);
+                cpu_disasm(instr, addr + i * 4, disasm, sizeof(disasm));
+                printf("  0x%08x: %08x  %s\n", addr + i * 4, instr, disasm);
             }
         }
         /* unknown */

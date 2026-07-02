@@ -1,4 +1,4 @@
-# CPU 分阶段实现方案
+﻿# CPU 分阶段实现方案
 
 > 作者：李特 | 最后更新：2026-06-30
 
@@ -97,7 +97,7 @@
 
 ### 做什么
 
-实现 6 个位域提取宏、6 种立即数拼接宏、`cpu_decode()` 函数和 `DecodedInsn` 结构体。
+实现 6 个位域提取宏、6 种立即数拼接宏、`cpu_decode()` 函数和 `DecodedInstr` 结构体。
 
 ### 涉及文件
 
@@ -108,8 +108,8 @@
 
 1. **6 个位域提取宏：** `OPCODE`, `RD`, `FUNCT3`, `RS1`, `RS2`, `FUNCT7`
 2. **6 种立即数拼接宏：** `IMM_I`, `IMM_S`, `IMM_B`, `IMM_U`, `IMM_J`
-3. **`DecodedInsn` 结构体：** opcode / rd / rs1 / rs2 / funct3 / funct7 / imm
-4. **`cpu_decode(uint32_t insn)`：** 按 opcode 分发到 6 种格式，提取各字段
+3. **`DecodedInstr` 结构体：** opcode / rd / rs1 / rs2 / funct3 / funct7 / imm
+4. **`cpu_decode(uint32_t Instr)`：** 按 opcode 分发到 6 种格式，提取各字段
 
 ### 为什么放第二
 
@@ -134,7 +134,7 @@
 
 ### 独立性
 
-✅ 零依赖。纯 `uint32_t → DecodedInsn` 的 combinational 函数，不涉及任何状态或 I/O。
+✅ 零依赖。纯 `uint32_t → DecodedInstr` 的 combinational 函数，不涉及任何状态或 I/O。
 
 ---
 
@@ -191,8 +191,8 @@ uint8_t fake_mem[4096];   // ⚠️ 仅 4KB，测试地址勿超过此范围
 PhysicalMemory stub_pmem; // 最小占位
 
 // 把测试指令序列装入"内存"
-static inline void stub_mem_load(uint32_t addr, const uint32_t *insns, int count) {
-    memcpy(&fake_mem[addr], insns, count * 4);
+static inline void stub_mem_load(uint32_t addr, const uint32_t *Instrs, int count) {
+    memcpy(&fake_mem[addr], Instrs, count * 4);
 }
 
 // CPU 取指令时调这个（签名与 mmu_read_32 对齐）
@@ -461,7 +461,7 @@ uint32_t mulhu(uint32_t a, uint32_t b) {
 
 ### 独立性
 
-✅ 零依赖。纯函数 `(uint32_t insn, uint32_t pc) → 字符串`。
+✅ 零依赖。纯函数 `(uint32_t Instr, uint32_t pc) → 字符串`。
 
 ---
 

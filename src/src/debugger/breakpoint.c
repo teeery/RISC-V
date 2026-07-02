@@ -19,7 +19,7 @@
  * ================================================================
  */
 
-#define EBREAK_INSN  0x00100073
+#define EBREAK_INSTR  0x00100073
 
 int debugger_add_breakpoint(struct Simulator *sim, uint32_t addr)
 {
@@ -53,8 +53,8 @@ int debugger_add_breakpoint(struct Simulator *sim, uint32_t addr)
 
     /* ④ 保存原始指令（通过 MMU 读虚拟地址） */
     ExceptionType exc = EXC_NONE;
-    uint32_t orig_insn;
-    if (!mmu_read_32(&sim->mmu, &sim->pmem, addr, &orig_insn,
+    uint32_t orig_instr;
+    if (!mmu_read_32(&sim->mmu, &sim->pmem, addr, &orig_instr,
                      sim->cpu.priv, &exc)) {
         fprintf(stderr, "Error: Cannot read memory at 0x%08x (exc=%d)\n",
                 addr, exc);
@@ -62,7 +62,7 @@ int debugger_add_breakpoint(struct Simulator *sim, uint32_t addr)
     }
 
     /* ⑤ 写入 EBREAK */
-    if (!mmu_write_32(&sim->mmu, &sim->pmem, addr, EBREAK_INSN,
+    if (!mmu_write_32(&sim->mmu, &sim->pmem, addr, EBREAK_INSTR,
                       sim->cpu.priv, &exc)) {
         fprintf(stderr, "Error: Cannot write EBREAK to 0x%08x (exc=%d)\n",
                 addr, exc);
@@ -72,7 +72,7 @@ int debugger_add_breakpoint(struct Simulator *sim, uint32_t addr)
     /* ⑥ 记录断点信息 */
     int index = sim->bp_count;
     sim->breakpoints[index].addr          = addr;
-    sim->breakpoints[index].original_insn = orig_insn;
+    sim->breakpoints[index].original_instr = orig_instr;
     sim->breakpoints[index].enabled       = true;
     sim->bp_count++;
 
@@ -93,7 +93,7 @@ bool debugger_del_breakpoint(struct Simulator *sim, int index)
     if (bp->enabled) {
         ExceptionType exc = EXC_NONE;
         if (!mmu_write_32(&sim->mmu, &sim->pmem, bp->addr,
-                          bp->original_insn, sim->cpu.priv, &exc)) {
+                          bp->original_instr, sim->cpu.priv, &exc)) {
             fprintf(stderr, "Warning: Failed to restore instruction at 0x%08x\n",
                     bp->addr);
         }

@@ -1,4 +1,4 @@
-#ifndef DEBUGGER_H
+﻿#ifndef DEBUGGER_H
 #define DEBUGGER_H
 
 #include "types.h"
@@ -41,7 +41,7 @@
 typedef struct {
     int      id;              // 断点编号
     uint32_t addr;            // 地址
-    uint32_t original_insn;   // 原始指令 (用于恢复)
+    uint32_t original_Instr;   // 原始指令 (用于恢复)
     bool     enabled;
 } Breakpoint;
 

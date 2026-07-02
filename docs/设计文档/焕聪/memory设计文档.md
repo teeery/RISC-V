@@ -1,4 +1,4 @@
-# memory 设计文档
+﻿# memory 设计文档
 
 > 作者：焕聪 | 最后更新：2026-07-01
 > 
@@ -409,14 +409,14 @@ main()
 ```
 CPU 执行循环
   │
-  ├─ Fetch: mmu_read_32(&mmu, &pmem, pc, &insn, priv)
+  ├─ Fetch: mmu_read_32(&mmu, &pmem, pc, &Instr, priv)
   │           │
   │           ├─ mmu_translate(pc, &paddr, is_exec=true)
   │           │   ├─ Bare 模式 → paddr = pc
   │           │   └─ Sv32 模式 → 两级页表遍历
   │           │        └─ 权限检查: X 位必须为 1
   │           │
-  │           └─ mem_read_32(&pmem, paddr, &insn)
+  │           └─ mem_read_32(&pmem, paddr, &Instr)
   │               └─ 边界检查 → data[paddr:paddr+3] 小端序拼接
   │
   ├─ Decode → Execute

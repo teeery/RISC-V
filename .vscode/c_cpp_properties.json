@@ -3,8 +3,9 @@
         {
             "name": "RISC-V Simulator",
             "includePath": [
-                "${workspaceFolder}/src/include/**",
-                "${workspaceFolder}/docs/参考项目结构1/include/**"
+                "${workspaceFolder}/src/include",
+                "${workspaceFolder}/src/src/loader",
+                "${workspaceFolder}/docs/参考项目结构1/include"
             ],
             "defines": [],
             "compilerPath": "C:/msys64/mingw64/bin/gcc.exe",
