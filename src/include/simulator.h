@@ -60,8 +60,8 @@ typedef struct Simulator {
     bool            debug_mode;     // 调试模式（Debugger 接管时设为 true）
 
     /* 统计 */
-    uint64_t        inst_count;     // 已执行指令数
-    uint64_t        cycle_count;    // 周期计数（基础版 ≈ inst_count）
+    uint64_t        instr_count;    // 已执行指令数
+    uint64_t        cycle_count;    // 周期计数（基础版 ≈ instr_count）
 } Simulator;
 
 /* ================================================================

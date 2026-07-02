@@ -94,8 +94,86 @@
 // 提示：包含 opcode, funct3, funct7（用 -1 表示不关心）, 指令名
 // 大概有 40 条左右的条目
 
-// TODO: 定义寄存器 ABI 名称数组
-// 提示：const char *reg_names[32] = { "zero", "ra", ... }
+//指令表的结构体（定义"列"）
+typedef struct {
+    uint8_t opcode;   // 操作码（低 7 位）
+    uint8_t funct3;   // 功能码 3（3 位，细分指令）
+    int8_t  funct7;   // 功能码 7（7 位，进一步细分）——注意：是 int8_t，
+                       //   -1 表示"不关心 funct7"，0x00 或 0x20 表示"必须匹配这个值"
+    char   *name;     // 指令名字符串（如 "addi"）
+} InstrEntry;
+
+//指令表数组（定义"行"）——共 37 条，覆盖全部 RV32I 指令
+static const InstrEntry instr_table[] = {
+    // ── U-type：高位立即数 ──────────────────────────
+    { 0x37, 0, -1,    "lui"   },
+    { 0x17, 0, -1,    "auipc" },
+
+    // ── J-type / I-type：跳转 ───────────────────────
+    { 0x6F, 0, -1,    "jal"   },
+    { 0x67, 0, -1,    "jalr"  },
+
+    // ── B-type：分支（6 条，靠 funct3 区分）─────────
+    { 0x63, 0, -1,    "beq"   },
+    { 0x63, 1, -1,    "bne"   },
+    { 0x63, 4, -1,    "blt"   },
+    { 0x63, 5, -1,    "bge"   },
+    { 0x63, 6, -1,    "bltu"  },
+    { 0x63, 7, -1,    "bgeu"  },
+
+    // ── I-type：Load（5 条）─────────────────────────
+    { 0x03, 0, -1,    "lb"    },
+    { 0x03, 1, -1,    "lh"    },
+    { 0x03, 2, -1,    "lw"    },
+    { 0x03, 4, -1,    "lbu"   },
+    { 0x03, 5, -1,    "lhu"   },
+
+    // ── S-type：Store（3 条）────────────────────────
+    { 0x23, 0, -1,    "sb"    },
+    { 0x23, 1, -1,    "sh"    },
+    { 0x23, 2, -1,    "sw"    },
+
+    // ── I-type：立即数算术（9 条）───────────────────
+    //      注意：slli/srli/srai 的 funct7 不能写 -1，因为它们的
+    //      opcode 和 funct3 都一样（0x13, funct3=1 或 5），只能靠 funct7 区分！
+    { 0x13, 0, -1,    "addi"  },
+    { 0x13, 1, 0x00,  "slli"  },   // funct7=0x00 → 逻辑左移
+    { 0x13, 2, -1,    "slti"  },
+    { 0x13, 3, -1,    "sltiu" },
+    { 0x13, 4, -1,    "xori"  },
+    { 0x13, 5, 0x00,  "srli"  },   // funct7=0x00 → 逻辑右移
+    { 0x13, 5, 0x20,  "srai"  },   // funct7=0x20 → 算术右移
+    { 0x13, 6, -1,    "ori"   },
+    { 0x13, 7, -1,    "andi"  },
+
+    // ── R-type：寄存器算术（10 条）──────────────────
+    //      注意：add/sub 的 opcode+funct3 相同（0x33, funct3=0），
+    //      srl/sra 也相同（0x33, funct3=5），只能靠 funct7 区分！
+    { 0x33, 0, 0x00,  "add"   },   // funct7=0x00 → 加法
+    { 0x33, 0, 0x20,  "sub"   },   // funct7=0x20 → 减法
+    { 0x33, 1, 0x00,  "sll"   },
+    { 0x33, 2, 0x00,  "slt"   },
+    { 0x33, 3, 0x00,  "sltu"  },
+    { 0x33, 4, 0x00,  "xor"   },
+    { 0x33, 5, 0x00,  "srl"   },   // funct7=0x00 → 逻辑右移
+    { 0x33, 5, 0x20,  "sra"   },   // funct7=0x20 → 算术右移
+    { 0x33, 6, 0x00,  "or"    },
+    { 0x33, 7, 0x00,  "and"   },
+};  // ← 注意分号！
+
+//寄存器 ABI 名称数组：把寄存器号 (0-31) 映射到汇编里用的名字
+//索引就是寄存器号，直接 reg_names[10] → "a0"
+static const char *reg_names[32] = {
+    "zero", "ra", "sp", "gp", "tp",   // x0-x4
+    "t0",   "t1", "t2",               // x5-x7
+    "s0",   "s1",                      // x8-x9 (s0=fp)
+    "a0",   "a1", "a2", "a3",
+    "a4",   "a5", "a6", "a7",         // x10-x17
+    "s2",   "s3", "s4", "s5",
+    "s6",   "s7", "s8", "s9",
+    "s10",  "s11",                     // x18-x27
+    "t3",   "t4", "t5", "t6",         // x28-x31
+};
 
 
 /* ============================================================================
@@ -147,15 +225,63 @@ DecodedInstr cpu_decode(uint32_t instr)
 {
     DecodedInstr d;
 
-    // TODO: 初始化 d 的所有字段为 0
+    // 初始化 d 的所有字段为 0
+    d.opcode=0;
+    d.rd=0;
+    d.rs1=0;
+    d.rs2=0;
+    d.funct3=0;
+    d.funct7=0;
+    d.imm=0;
 
-    // TODO: Step 1 — 用宏提取 opcode / rd / rs1 / rs2 / funct3 / funct7
+    // Step 1 — 用宏提取 opcode / rd / rs1 / rs2 / funct3 / funct7
+    d.opcode = OPCODE(instr);
+    d.rd = RD(instr);
+    d.rs1 = RS1(instr);
+    d.rs2 = RS2(instr);
+    d.funct3 = FUNCT3(instr);
+    d.funct7 = FUNCT7(instr);
 
-    // TODO: Step 2 — switch(opcode) 设置 d.imm
+    // Step 2 — switch(opcode) 设置 d.imm
     //   提示：每个 case 只需要一行，调对应的 IMM_* 宏
     //   例: case 0x37: d.imm = IMM_U(instr); break;  // LUI
+    switch (d.opcode) {
 
-    // TODO: Step 3 — 返回 d
+        case 0x37: // LUI
+        case 0x17: // AUIPC
+            d.imm = IMM_U(instr);
+            break;
+
+        case 0x6F: // JAL
+            d.imm = IMM_J(instr);
+            break;
+
+        case 0x67: // JALR
+        case 0x03: // Load
+        case 0x13: // OP-IMM
+        case 0x0F: // FENCE
+        case 0x73: //SYSTEM
+            d.imm = IMM_I(instr);
+            break;
+
+        case 0x63: // Branch
+            d.imm = IMM_B(instr);
+            break;
+
+        case 0x23: // Store
+            d.imm = IMM_S(instr);
+            break;
+        
+        case 0x33: // OP
+            d.imm = 0; // R-type 没有立即数
+            break;
+      
+        default:
+            d.opcode = 0; // 非法指令，设 opcode=0，execute.c 会处理异常
+            break;
+    }
+
+    // Step 3 — 返回 d
     return d;
 }
 
@@ -242,14 +368,116 @@ DecodedInstr cpu_decode(uint32_t instr)
 void cpu_disasm(uint32_t instr, uint32_t pc, char *buf, size_t bufsz)
 {
     // TODO: Step 1 — 调 cpu_decode(instr)
+    DecodedInstr d = cpu_decode(instr);
 
     // TODO: Step 2 — 在指令名表中查找匹配的条目
     //   提示：写一个循环遍历指令表，优先精确匹配 funct7，
     //   其次匹配 funct7==-1 的通配条目
+    const char *name = "unknown"; // 默认指令名
+    for(int i=0; i<sizeof(instr_table)/sizeof(instr_table[0]);i++){
+        if(instr_table[i].opcode == d.opcode && instr_table[i].funct3 == d.funct3){
+            if(instr_table[i].funct7 == d.funct7 || instr_table[i].funct7 == -1){
+                name = instr_table[i].name;
+                break;
+            }
+        }
+    }
 
-    // TODO: Step 3 — 根据 opcode/funct3 用 switch 判断格式，snprintf 拼字符串
-    //   提示：可以先 switch(opcode) 分大类，再对 0x13/0x33/0x73 等
-    //   根据 funct3 细分。注意 SLLI/SRLI/SRAI 的处理（funct7 区分）。
+    // Step 3 — 根据 opcode 选格式，snprintf 拼字符串
+    //
+    //   格式速查：
+    //   ┌──────────┬────────────────────────────────────────────┐
+    //   │ R-type   │ "add    s0, t0, t1"    ← 3 寄存器          │
+    //   │ I-算术    │ "addi   gp, ra, 2"    ← 2 寄存器 + 数字   │
+    //   │ I-Load   │ "lw     t0, 8(sp)"    ← rd, imm(rs1)      │
+    //   │ S-type   │ "sw     t0, 8(sp)"    ← rs2, imm(rs1)     │
+    //   │ B-type   │ "beq    t0, t1, 0x..."← 2 寄存器 + 目标   │
+    //   │ U-type   │ "lui    x1, 0x..."    ← rd, 大立即数       │
+    //   │ J-type   │ "jal    ra, 0x..."    ← rd, 目标地址       │
+    //   │ SYSTEM   │ "ecall" / "ebreak"    ← 特殊，无操作数     │
+    //   └──────────┴────────────────────────────────────────────┘
+
+    switch (d.opcode) {
+
+    // ── R-type：rd, rs1, rs2 ────────────────────────────
+    case 0x33:
+        snprintf(buf, bufsz, "%-7s %s, %s, %s",
+                 name,
+                 reg_names[d.rd],
+                 reg_names[d.rs1],
+                 reg_names[d.rs2]);
+        break;
+
+    // ── I-type 算术 (ADDI/SLTI/.../JALR)：rd, rs1, imm ─
+    case 0x13:
+    case 0x67:
+    case 0x0F:   // FENCE — 基础模拟器当 NOP
+        snprintf(buf, bufsz, "%-7s %s, %s, %d",
+                 name,
+                 reg_names[d.rd],
+                 reg_names[d.rs1],
+                 d.imm);
+        break;
+
+    // ── I-type Load：rd, imm(rs1) ──────────────────────
+    case 0x03:
+        snprintf(buf, bufsz, "%-7s %s, %d(%s)",
+                 name,
+                 reg_names[d.rd],
+                 d.imm,
+                 reg_names[d.rs1]);
+        break;
+
+    // ── S-type：rs2, imm(rs1) ──────────────────────────
+    case 0x23:
+        snprintf(buf, bufsz, "%-7s %s, %d(%s)",
+                 name,
+                 reg_names[d.rs2],
+                 d.imm,
+                 reg_names[d.rs1]);
+        break;
+
+    // ── B-type：rs1, rs2, 目标地址 ──────────────────────
+    case 0x63:
+        snprintf(buf, bufsz, "%-7s %s, %s, 0x%x",
+                 name,
+                 reg_names[d.rs1],
+                 reg_names[d.rs2],
+                 pc + d.imm);    // 目标地址 = PC + 偏移
+        break;
+
+    // ── U-type (LUI/AUIPC)：rd, 高位立即数 ─────────────
+    case 0x37:
+    case 0x17:
+        snprintf(buf, bufsz, "%-7s %s, 0x%x",
+                 name,
+                 reg_names[d.rd],
+                 d.imm);         // U-type 的 imm 已在 bit[31:12]
+        break;
+
+    // ── J-type (JAL)：rd, 目标地址 ──────────────────────
+    case 0x6F:
+        snprintf(buf, bufsz, "%-7s %s, 0x%x",
+                 name,
+                 reg_names[d.rd],
+                 pc + d.imm);
+        break;
+
+    // ── SYSTEM：ecall / ebreak — 没有操作数 ─────────────
+    case 0x73:
+        if (d.funct3 == 0 && d.imm == 0)
+            snprintf(buf, bufsz, "%-7s", "ecall");
+        else if (d.funct3 == 0 && d.imm == 1)
+            snprintf(buf, bufsz, "%-7s", "ebreak");
+        else
+            snprintf(buf, bufsz, "%-7s", name);  // 暂不处理的 CSR 指令
+        break;
+
+    // ── 非法指令 ──────────────────────────────────────
+    default:
+        snprintf(buf, bufsz, "%-7s", "unknown");
+        break;
+    }
 }
 
 
