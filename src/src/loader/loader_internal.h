@@ -123,4 +123,21 @@ bool elf_load_segment(FILE *fp, Elf32_Phdr *phdr,
  */
 bool elf_setup_stack(PhysicalMemory *pmem, uint32_t *stack_top);
 
+/* ═══════════════════════════════════════════════════════════════
+ * Section 解析（elf_section.c — 调试/符号表用）═══════════════
+ * ═══════════════════════════════════════════════════════════════ */
+
+/* 解析 ELF 文件的 Section Header Table */
+int elf_parse_sections(const char *filename,
+                       Elf32_Shdr *shdrs, int max,
+                       char *shstrtab, int strsize);
+
+/* 按名称查找 Section（如 ".symtab", ".strtab"）*/
+const Elf32_Shdr *elf_find_section(const Elf32_Shdr *shdrs, int count,
+                                   const char *shstrtab, const char *name);
+
+/* 获取 Section 的名称字符串 */
+const char *elf_get_section_name(const Elf32_Shdr *shdr,
+                                 const char *shstrtab);
+
 #endif /* LOADER_INTERNAL_H */

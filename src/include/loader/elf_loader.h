@@ -306,6 +306,31 @@ typedef int32_t  Elf32_Sword;   // 32 位有符号字（极少使用，仅为了
 #define PF_R         4          // 可读（几乎所有段都设这个位）
                                 // 常见组合：PF_R|PF_X=5 (.text), PF_R|PF_W=6 (.data)
 
+/* ── Section Header 类型常量（sh_type）────────────────────────
+ *
+ * 这些用于解析 Section Header Table（调试/符号表需要），
+ * 不影响 Program Header 的加载流程。
+ * ─────────────────────────────────────────────────────────── */
+
+#define SHT_NULL      0          // 空节
+#define SHT_PROGBITS  1          // 代码/数据（.text, .data 等）
+#define SHT_SYMTAB    2          // 符号表（给调试器用）
+#define SHT_STRTAB    3          // 字符串表（.strtab, .shstrtab）
+#define SHT_RELA      4          // 重定位表（带加数）
+#define SHT_HASH      5          // 符号哈希表
+#define SHT_DYNAMIC   6          // 动态链接信息
+#define SHT_NOTE      7          // 注释
+#define SHT_NOBITS    8          // 不占文件空间的节（.bss）
+#define SHT_REL       9          // 重定位表
+#define SHT_SHLIB     10         // 保留
+#define SHT_DYNSYM    11         // 动态符号表
+
+/* ── Section 标志常量（sh_flags）──────────────────────────── */
+
+#define SHF_WRITE     0x1        // 节在运行时可写
+#define SHF_ALLOC     0x2        // 节在运行时占用内存
+#define SHF_EXECINSTR 0x4        // 节包含可执行指令
+
 /* ═══════════════════════════════════════════════════════════════
  * 第 3 部分：ELF32 结构体
  * ═══════════════════════════════════════════════════════════════
@@ -472,6 +497,38 @@ typedef struct {
     Elf32_Word  p_flags;    // ★ 权限位：PF_R/W/X 组合
     Elf32_Word  p_align;    // 对齐要求（通常 0x1000，0 或 1 表示无要求）
 } Elf32_Phdr;
+
+/* ── Elf32_Shdr：Section Header（40 字节）────────────────────
+ *
+ * Section Header Table 在文件的 ehdr.e_shoff 偏移处，包含
+ * ehdr.e_shnum 个条目。主要用于调试和符号解析——运行时加载不需要。
+ *
+ *   偏移   大小   字段          说明
+ *   ─────────────────────────────────────────────────────────
+ *   0x00     4    sh_name       ★ 节名称在 .shstrtab 字符串表中的偏移
+ *   0x04     4    sh_type       ★ 节类型（SHT_PROGBITS/SHT_SYMTAB/...）
+ *   0x08     4    sh_flags      节标志（SHF_WRITE/SHF_ALLOC/SHF_EXECINSTR）
+ *   0x0C     4    sh_addr       虚拟地址（SHF_ALLOC 时有效）
+ *   0x10     4    sh_offset     节数据在文件中的偏移
+ *   0x14     4    sh_size       节大小（字节）
+ *   0x18     4    sh_link       关联节索引（.symtab → .strtab）
+ *   0x1C     4    sh_info       额外信息
+ *   0x20     4    sh_addralign  对齐要求
+ *   0x24     4    sh_entsize    条目大小（符号表=16，字符串表=0）
+ * ─────────────────────────────────────────────────────────── */
+
+typedef struct {
+    Elf32_Word  sh_name;       // 名称在 .shstrtab 中的偏移
+    Elf32_Word  sh_type;       // 节类型（SHT_*）
+    Elf32_Word  sh_flags;      // 节标志（SHF_*）
+    Elf32_Addr  sh_addr;       // 虚拟地址
+    Elf32_Off   sh_offset;     // 文件偏移
+    Elf32_Word  sh_size;       // 节大小
+    Elf32_Word  sh_link;       // 关联节索引
+    Elf32_Word  sh_info;       // 额外信息
+    Elf32_Word  sh_addralign;  // 对齐
+    Elf32_Word  sh_entsize;    // 条目大小
+} Elf32_Shdr;
 
 /* ═══════════════════════════════════════════════════════════════
  * 第 4 部分：Loader 对外接口
