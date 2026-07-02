@@ -155,7 +155,7 @@ bool elf_load(const char *filename, PhysicalMemory *pmem, MMUState *mmu,
      *
      * 栈独立于 ELF 段——它在 ELF 文件中没有对应数据。
      * Loader 负责在物理内存中分配栈空间（默认 256KB），
-     * 并返回栈顶地址 0xC0000000（团队结论 7）。
+     * 并返回栈顶地址 0x07F00000（恒等映射可用；完善版 0xC0000000）。
      *
      * 调用者负责把这个值写入 sim->cpu.regs[2]（sp 寄存器）。
      */

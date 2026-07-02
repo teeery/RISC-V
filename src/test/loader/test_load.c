@@ -38,7 +38,7 @@ int main(void) {
 
     /* ── 测试 1：加载合法 RISC-V ELF ── */
     {
-        bool ok = elf_load("test/loader/minimal.elf", &pmem, &mmu,
+        bool ok = elf_load("src/test/loader/minimal.elf", &pmem, &mmu,
                            &entry, &stack_top);
         if (!ok) FAIL("elf_load should succeed on valid ELF");
         PASS("elf_load succeeds on valid RISC-V ELF32");

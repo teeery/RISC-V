@@ -1,6 +1,7 @@
 #include "simulator.h"
 #include "debugger/debugger.h"   // debugger_check_breakpoint
 #include "cpu/execute.h"         // cpu_execute, cpu_trap
+#include "cpu/decode.h"          // DecodedInstr, cpu_decode
 #include "loader/elf_loader.h"   // elf_load
 #include <inttypes.h>
 #include <stdio.h>

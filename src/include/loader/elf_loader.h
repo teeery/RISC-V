@@ -27,8 +27,8 @@
  *     - Loader 调 mem_map + mem_load + mmu_map_page（跨两层）
  *
  *   【结论 7 — Loader → CPU 参数传递】（团队讨论清单 §结论7）
- *     - 栈顶地址：0xC0000000（和参考项目2 一致，接近真实 Linux 3GB 用户空间顶部）
- *     - 栈大小：256KB（0x40000），范围 0xBFFC0000 ~ 0xC0000000
+ *     - 栈顶地址：0x07F00000（恒等映射可用，128MB 内）；完善版 0xC0000000（团队结论 7）
+ *     - 栈大小：256KB（0x40000），当前范围 0x07EC0000 ~ 0x07F00000
  *     - Loader 通过输出参数 *entry 和 *stack_top 返回两个值
  *     - 由 main.c 或 sim_load_elf() 负责写入 sim->cpu.pc 和 sim->cpu.regs[2]
  *     - Loader 不传 argc/argv/envp，只设 sp
@@ -98,7 +98,7 @@
  *
  *       // 调用者负责设置 CPU 初始状态（团队结论 7）
  *       sim->cpu.pc = entry;                  // 程序入口地址
- *       sim->cpu.regs[2] = stack_top;         // sp = 栈顶 0xC0000000
+ *       sim->cpu.regs[2] = stack_top;         // sp = 栈顶（当前 0x07F00000）
  *       // 其他 31 个寄存器保持 0，由程序自己初始化
  *
  *       sim_run(&sim);                        // 开始执行

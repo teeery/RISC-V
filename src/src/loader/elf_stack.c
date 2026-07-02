@@ -11,7 +11,7 @@
  *
  *   我们的栈布局（从高地址到低地址）：
  *
- *     stack_top = 0xC0000000  ─┐
+ *     stack_top = 0x07F00000  ─┐
  *                              │ ← sp 寄存器指向这里（高地址）
  *                              │    函数调用向 ↓ 方向增长
  *                              │
@@ -19,8 +19,8 @@
  *                              │    用户程序的第一个函数调用
  *                              │    直接从 sp 开始写
  *                              │
- *     stack_base = 0xBFFC0000  ─┘ ← 栈底（低地址）
- *            = 0xC0000000 - 256KB
+ *     stack_base = 0x07EC0000  ─┘ ← 栈底（低地址）
+ *            = 0x07F00000 - 256KB
  *
  * ── 完善版 TODO ───────────────────────────────────────────
  *
@@ -52,12 +52,13 @@ bool elf_setup_stack(PhysicalMemory *pmem, uint32_t *stack_top)
     /*
      * 计算栈基址（栈的起始物理地址）
      *
-     * stack_top  = 0xC0000000（高位，栈从这里向下增长）
-     * stack_base = 0xC0000000 - 256KB = 0xBFFC0000（低位，栈的底部）
+     * stack_top  = 0x07F00000（高位，128MB 物理内存内，栈向下增长）
+     * stack_base = 0x07F00000 - 256KB = 0x07EC0000
      *
      * 两个地址都在 3GB 附近，给代码段/数据段/堆留下了
      * 0x00000000 ~ 0xBFFBFFFF 的广阔空间。
      */
+    /* stack_base = 0x07F00000 - 256KB = 0x07EC0000（128MB 物理内存内）*/
     uint32_t stack_base = STACK_TOP_DEFAULT - STACK_SIZE_DEFAULT;
 
     /*
@@ -84,10 +85,10 @@ bool elf_setup_stack(PhysicalMemory *pmem, uint32_t *stack_top)
     /*
      * 设置栈顶地址
      *
-     * sp（stack pointer）= 0xC0000000，指向栈的最高地址。
+     * sp（stack pointer）= 0x07F00000，指向栈的最高地址。
      * 用户程序第一条使用栈的指令会从这个地址开始写。
      * 按照 RISC-V ABI，sp 应该保持 16 字节对齐——
-     * 0xC0000000 正好是 16 的倍数 ✓
+     * 0x07F00000 正好是 16 的倍数 ✓
      *
      * 这个值通过输出参数返回，由调用者（main.c）写入 cpu.regs[2]。
      */
