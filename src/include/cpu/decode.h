@@ -50,7 +50,7 @@
                                   ((((instr) >> 21) & 0x3FF) << 1)))
 
 /* ── 解码结果结构体 ── */
-typedef struct {
+typedef struct DecodedInstr {
     uint8_t  opcode;   // 指令类型大类 [6:0]
     uint8_t  rd;       // 目标寄存器号 (0-31)
     uint8_t  rs1;      // 源寄存器1号  (0-31)
