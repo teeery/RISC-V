@@ -82,7 +82,7 @@ bool mmu_translate(MMUState *mmu, uint32_t vaddr, uint32_t *paddr,
     uint32_t pde = l1[vpn1];
 
     if (!(pde & PTE_VALID)) {
-        *exc = is_exec ? EXC_INSTR_ACCESS_FAULT :
+        *exc = is_exec ? EXC_INST_ACCESS_FAULT :
                is_write ? EXC_STORE_ACCESS_FAULT :
                           EXC_LOAD_ACCESS_FAULT;
         return false;
@@ -111,7 +111,7 @@ bool mmu_translate(MMUState *mmu, uint32_t vaddr, uint32_t *paddr,
     uint32_t pte = l2[vpn0];
 
     if (!(pte & PTE_VALID)) {
-        *exc = is_exec ? EXC_INSTR_ACCESS_FAULT :
+        *exc = is_exec ? EXC_INST_ACCESS_FAULT :
                is_write ? EXC_STORE_ACCESS_FAULT :
                           EXC_LOAD_ACCESS_FAULT;
         return false;
@@ -123,7 +123,7 @@ bool mmu_translate(MMUState *mmu, uint32_t vaddr, uint32_t *paddr,
         return false;
     }
     if (is_exec && !(pte & PTE_EXEC)) {
-        *exc = EXC_INSTR_ACCESS_FAULT;
+        *exc = EXC_INST_ACCESS_FAULT;
         return false;
     }
     if (priv == PRIV_USER && !(pte & PTE_USER)) {
@@ -271,14 +271,9 @@ bool mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
     (void)vpn0; // TODO: 页表管理器就绪后用于写入第二级 PTE
     uint32_t ppn  = paddr >> PAGE_SHIFT;
 
-    /* MEM_* → PTE_* 转换：左移 1 位 + PTE_VALID
-     * MEM_READ=1<<0 → PTE_READ=1<<1, MEM_WRITE=1<<1 → PTE_WRITE=1<<2, ...
-     */
-    uint8_t pte_flags = ((flags << 1) & (PTE_READ | PTE_WRITE | PTE_EXEC))
-                      | PTE_VALID;
-    if (flags & MEM_READ)  pte_flags |= PTE_READ;
-    if (flags & MEM_WRITE) pte_flags |= PTE_WRITE;
-    if (flags & MEM_EXEC)  pte_flags |= PTE_EXEC;
+    /* MEM_* → PTE_* 转换使用 mmu.h 中定义的 mem_perm_to_pte_flags(flags)
+     * TODO: 页表管理器就绪后，将其返回值写入第二级 PTE */
+    (void)flags;  // flags 暂未使用，页表管理器就绪后移除
 
     /* 确保根页表存在 */
     if (!mmu->root_page_table) {

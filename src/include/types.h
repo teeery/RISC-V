@@ -87,9 +87,9 @@ typedef enum {
  */
 typedef enum {
     EXC_NONE                    = 0,
-    EXC_INST_ADDR_MISALIGNED    = 1,   // 指令地址未对齐
-    EXC_INST_ACCESS_FAULT       = 2,   // 取指访问错误（页错误 / 越权）
-    EXC_ILLEGAL_INST            = 3,   // 非法指令
+    EXC_INST_ADDR_MISALIGNED   = 1,   // 指令地址未对齐
+    EXC_INST_ACCESS_FAULT      = 2,   // 取指访问错误（页错误 / 越权）
+    EXC_ILLEGAL_INST           = 3,   // 非法指令
     EXC_BREAKPOINT              = 4,   // 断点 (ebreak)
     EXC_LOAD_ADDR_MISALIGNED    = 5,   // Load 地址未对齐
     EXC_LOAD_ACCESS_FAULT       = 6,   // Load 访问错误
@@ -98,7 +98,7 @@ typedef enum {
     EXC_ECALL_U                 = 9,   // ECALL from U-mode
     EXC_ECALL_S                 = 10,  // ECALL from S-mode（保留）
     EXC_ECALL_M                 = 11,  // ECALL from M-mode
-    EXC_PAGE_FAULT_INST         = 12,  // 取指页错误（Sv32 模式）
+    EXC_PAGE_FAULT_INST        = 12,  // 取指页错误（Sv32 模式）
     EXC_PAGE_FAULT_LOAD         = 13,  // Load 页错误（Sv32 模式）
     EXC_PAGE_FAULT_STORE        = 15,  // Store 页错误（Sv32 模式）
 } ExceptionType;
