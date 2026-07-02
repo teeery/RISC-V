@@ -9,14 +9,14 @@
 /* ============================================================
  * mmu.c — 虚拟内存管理单元实现（Sv32 页表）
  *
- * 实现 mmu.h 中声明的 12 个函数。
+ * 实现 mmu.h 中声明的 13 个函数。
  *
  * 设计要点：
  *   - Bare 模式（satp.MODE = 0）：vaddr → paddr 恒等映射
  *   - Sv32 模式（satp.MODE = 1）：两级页表遍历 + PTE 权限校验
  *   - 返回值 bool + ExceptionType *exc 输出参数
  *   - 页表独立 malloc，不复用物理内存
- *   - mmu_map_page: MEM_* flags → PTE_* 移位转换
+ *   - 页表管理器：MMUState.pt_mgr 追踪 PPN→l2_pointer 映射
  * ============================================================
  */
 
@@ -28,6 +28,7 @@
 #define PT_ENTRIES      1024        // 每级页表 1024 项
 #define PTE_PPN_MASK    0xFFFFF000  // PTE 高 22 位为 PPN
 #define PTE_FLAGS_MASK  0x000003FF  // PTE 低 10 位为标志
+#define PT_MGR_INIT_CAP 16          // 页表管理器初始容量
 
 /* 从 PTE 提取物理页号 */
 static inline uint32_t pte_to_ppn(uint32_t pte) {
@@ -40,15 +41,87 @@ static inline uint32_t make_pte(uint32_t ppn, uint32_t flags) {
 }
 
 /* ============================================================
- * 初始化
+ * 页表管理器 — PPN → 宿主机指针映射
+ * ============================================================
+ */
+
+/* 向管理器中注册一个第二级页表 */
+static void pt_mgr_add(MMUState *mmu, uint32_t ppn, uint32_t *l2_ptr)
+{
+    int n = mmu->pt_mgr.count;
+    int cap = mmu->pt_mgr.capacity;
+
+    /* 首次使用：分配管理器的内部数组 */
+    if (!mmu->pt_mgr.ppns) {
+        mmu->pt_mgr.capacity = PT_MGR_INIT_CAP;
+        mmu->pt_mgr.ppns   = (uint32_t *)calloc((size_t)PT_MGR_INIT_CAP,
+                                                  sizeof(uint32_t));
+        mmu->pt_mgr.tables = (uint32_t **)calloc((size_t)PT_MGR_INIT_CAP,
+                                                  sizeof(uint32_t *));
+        mmu->pt_mgr.count = 0;
+        cap = PT_MGR_INIT_CAP;
+    }
+
+    /* 动态扩容 */
+    if (n >= cap) {
+        int new_cap = cap * 2;
+        mmu->pt_mgr.ppns   = (uint32_t *)realloc(mmu->pt_mgr.ppns,
+                                                   (size_t)new_cap * sizeof(uint32_t));
+        mmu->pt_mgr.tables = (uint32_t **)realloc(mmu->pt_mgr.tables,
+                                                    (size_t)new_cap * sizeof(uint32_t *));
+        mmu->pt_mgr.capacity = new_cap;
+    }
+
+    mmu->pt_mgr.ppns[n]   = ppn;
+    mmu->pt_mgr.tables[n] = l2_ptr;
+    mmu->pt_mgr.count++;
+}
+
+/* 根据物理页号查找第二级页表指针，找不到返回 NULL */
+static uint32_t *pt_mgr_find(MMUState *mmu, uint32_t ppn)
+{
+    for (int i = 0; i < mmu->pt_mgr.count; i++) {
+        if (mmu->pt_mgr.ppns[i] == ppn) {
+            return mmu->pt_mgr.tables[i];
+        }
+    }
+    return NULL;
+}
+
+/* 释放页表管理器及其追踪的所有第二级页表 */
+static void pt_mgr_free(MMUState *mmu)
+{
+    for (int i = 0; i < mmu->pt_mgr.count; i++) {
+        free(mmu->pt_mgr.tables[i]);
+    }
+    free(mmu->pt_mgr.ppns);
+    free(mmu->pt_mgr.tables);
+    mmu->pt_mgr.ppns    = NULL;
+    mmu->pt_mgr.tables  = NULL;
+    mmu->pt_mgr.count   = 0;
+    mmu->pt_mgr.capacity = 0;
+}
+
+/* ============================================================
+ * 初始化 / 销毁
  * ============================================================
  */
 
 void mmu_init(MMUState *mmu)
 {
+    memset(mmu, 0, sizeof(MMUState));
     mmu->satp    = 0;
     mmu->enabled = false;
     mmu->root_page_table = (uint32_t *)calloc(PT_ENTRIES, sizeof(uint32_t));
+}
+
+void mmu_destroy(MMUState *mmu)
+{
+    pt_mgr_free(mmu);
+    free(mmu->root_page_table);
+    mmu->root_page_table = NULL;
+    mmu->satp    = 0;
+    mmu->enabled = false;
 }
 
 /* ============================================================
@@ -98,22 +171,22 @@ bool mmu_translate(MMUState *mmu, uint32_t vaddr, uint32_t *paddr,
     }
 
     /* 非叶子：PDE.PPN 指向第二级页表 */
-    /* TODO: 需要页表管理器将 PPN → 宿主机指针 */
-    /* 简化：目前第二级页表通过动态分配，非物理地址中的 PPN */
-    uint32_t *l2 = NULL; // 需从页表管理器查找 l2 = page_table_pool[pte_to_ppn(pde)]
+    uint32_t *l2 = pt_mgr_find(mmu, pte_to_ppn(pde));
     if (!l2) {
-        *paddr = vaddr;   // fallback: 恒等映射（缺少页表管理器时）
-        *exc   = EXC_NONE;
-        return true;
+        /* 第二级页表不存在 → 页错误 */
+        *exc = is_exec ? EXC_PAGE_FAULT_INST :
+               is_write ? EXC_PAGE_FAULT_STORE :
+                          EXC_PAGE_FAULT_LOAD;
+        return false;
     }
 
     /* 第二级：读 PTE */
     uint32_t pte = l2[vpn0];
 
     if (!(pte & PTE_VALID)) {
-        *exc = is_exec ? EXC_INST_ACCESS_FAULT :
-               is_write ? EXC_STORE_ACCESS_FAULT :
-                          EXC_LOAD_ACCESS_FAULT;
+        *exc = is_exec ? EXC_PAGE_FAULT_INST :
+               is_write ? EXC_PAGE_FAULT_STORE :
+                          EXC_PAGE_FAULT_LOAD;
         return false;
     }
 
@@ -268,12 +341,10 @@ bool mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
 {
     uint32_t vpn1 = (vaddr >> VPN1_SHIFT) & 0x3FF;
     uint32_t vpn0 = (vaddr >> VPN0_SHIFT) & 0x3FF;
-    (void)vpn0; // TODO: 页表管理器就绪后用于写入第二级 PTE
     uint32_t ppn  = paddr >> PAGE_SHIFT;
 
-    /* MEM_* → PTE_* 转换使用 mmu.h 中定义的 mem_perm_to_pte_flags(flags)
-     * TODO: 页表管理器就绪后，将其返回值写入第二级 PTE */
-    (void)flags;  // flags 暂未使用，页表管理器就绪后移除
+    /* MEM_* → PTE_* 转换 */
+    uint8_t pte_flags = mem_perm_to_pte_flags(flags);
 
     /* 确保根页表存在 */
     if (!mmu->root_page_table) {
@@ -282,24 +353,36 @@ bool mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
 
     /* 第一级 PDE：检查是否需要分配第二级页表 */
     uint32_t *l1 = mmu->root_page_table;
+    uint32_t *l2 = NULL;
+
     if (!(l1[vpn1] & PTE_VALID)) {
         /* 分配第二级页表 */
-        /* TODO: 需要页表管理器追踪所有第二级页表以便 mmu_translate 查找 */
-        uint32_t *l2 = (uint32_t *)calloc(PT_ENTRIES, sizeof(uint32_t));
-        (void)l2;  // TODO: 页表管理器就绪后移除
-        ppn = 0; // 占位：实际应由页表管理器分配物理页号
-        l1[vpn1] = make_pte(ppn, PTE_VALID);
+        l2 = (uint32_t *)calloc(PT_ENTRIES, sizeof(uint32_t));
+        if (!l2) {
+            return false;   // calloc 失败
+        }
+
+        /* 用 vpn1 的低位作为"虚拟 PPN"来追踪 l2 表。
+         * 真实硬件用物理页号，模拟器用一个自定义索引即可，
+         * 关键是 ppn 在 pt_mgr 中唯一即可。
+         * 这里用 (vpn1 << 10) | 0xFF0 保证不冲突。 */
+        uint32_t l2_ppn = (vpn1 << 10) | 0xFF0;
+
+        /* 注册到页表管理器 */
+        pt_mgr_add(mmu, l2_ppn, l2);
+
+        /* 写第一级 PDE：指向第二级 + 仅设置 V 位（非叶子） */
+        l1[vpn1] = make_pte(l2_ppn, PTE_VALID);
     }
 
-    /* 第二级 PTE */
-    ppn = paddr >> PAGE_SHIFT;  // 恢复真正的 PPN
-    /* TODO: 从页表管理器获取 l2 指针并写入 PTE
-    uint32_t *l2 = get_l2_table(pte_to_ppn(l1[vpn1]));
-    if (l2) {
-        l2[vpn0] = make_pte(ppn, pte_flags);
+    /* 第二级：写 PTE（重新查管理器获取 l2 指针，确保一致性） */
+    uint32_t l2_ppn = pte_to_ppn(l1[vpn1]);
+    l2 = pt_mgr_find(mmu, l2_ppn);
+    if (!l2) {
+        return false;   // 内部不一致
     }
-    */
 
+    l2[vpn0] = make_pte(ppn, pte_flags);
     return true;
 }
 
