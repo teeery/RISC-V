@@ -398,7 +398,7 @@ main()
   │   ├─ 遍历 Program Headers (PT_LOAD):
   │   │   ├─ mem_map(&pmem, vaddr, memsz, flags, name)  ← 注册区域
   │   │   └─ mem_load(&pmem, vaddr, data, filesz)       ← 拷贝段数据
-  │   └─ mem_map(&pmem, 0xBFFC0000, 0x40000, MEM_READ | MEM_WRITE, "stack") ← 设置栈区域（256KB）
+  │   └─ mem_map(&pmem, 0x07EC0000, 0x40000, MEM_READ | MEM_WRITE, "stack") ← 栈区域（恒等映射 128MB 内；完善版 0xBFFC0000）
   │
   ├─ cpu.pc = elf_entry
   └─ cpu.regs[sp] = 栈顶
