@@ -126,7 +126,7 @@ bool elf_load(const char *filename, PhysicalMemory *pmem, MMUState *mmu,
 | `pmem` | 输入/输出 | 物理内存指针，段数据写入其 `data[]` 数组 |
 | `mmu` | 输入/输出 | MMU 状态指针，用于建立虚拟地址页表映射 |
 | `entry` | **输出** | 程序入口虚拟地址（`e_entry`），调用者写入 `cpu.pc` |
-| `stack_top` | **输出** | 栈顶虚拟地址（`0xC0000000`），调用者写入 `cpu.regs[REG_SP]` |
+| `stack_top` | **输出** | 栈顶虚拟地址（`0x07F00000`），调用者写入 `cpu.regs[REG_SP]` |
 | 返回值 | 输出 | `true` 加载成功，`false` 失败（已打印错误信息） |
 
 **实现位置：** [`src/loader/elf_load.c`](../../src/src/loader/elf_load.c)
@@ -208,8 +208,13 @@ typedef int32_t  Elf32_Sword;   // 32 位有符号字
 
 栈常量（在 `src/src/loader/loader_internal.h` 中定义）：
 ```c
-#define STACK_TOP_DEFAULT   0xC0000000      // 栈顶，和团队结论7一致
-#define STACK_SIZE_DEFAULT  (256 * 1024)     // 256KB (0x40000)，栈范围 0xBFFC0000 ~ 0xC0000000
+// 简化版（恒等映射，128MB 物理内存内可用）
+#define STACK_TOP_DEFAULT   0x07F00000      // 128MB 高位
+// 完善版（MMU Sv32 后启用）
+// #define STACK_TOP_DEFAULT 0xC0000000    // 团队结论 7，3GB 位置
+#define STACK_SIZE_DEFAULT  (256 * 1024)     // 256KB (0x40000)
+// 当前范围: 0x07EC0000 ~ 0x07F00000
+// 完善版范围: 0xBFFC0000 ~ 0xC0000000
 ```
 
 ### 3.2 内部实现思路
@@ -248,8 +253,8 @@ elf_load(filename, pmem, mmu, entry, stack_top)
 │
 ├─ 7. elf_setup_stack(pmem, stack_top) ← ★ 已实现（elf_stack.c）
 │     ├─ mem_map(pmem, base, 256KB, RW, "stack")
-│     │   其中 base = 0xC0000000 - 256KB = 0xBFFC0000
-│     └─ *stack_top = 0xC0000000
+│     │   其中 base = 0x07F00000 - 256KB = 0x07EC0000
+│     └─ *stack_top = 0x07F00000
 │
 └─ 8. printf 加载信息, return true   ← ★ 已实现
 ```
@@ -322,8 +327,8 @@ elf_load_segment(fp, phdr, pmem, mmu)
 3. 通过 `mem_load` 接口写入，不直接操作 `pmem->data[]`，保持模块边界清晰
 4. 加载完成后 `free`，内存峰值 = 最大段大小（通常 < 1MB）
 
-**为什么栈放在 `0xC0000000`？**
-这是团队讨论结论（结论 7），和参考项目 2 一致。`0xC0000000` 接近 3GB 位置，更接近真实 Linux 用户空间布局。栈向下增长 256KB，范围 `0xBFFC0000` ~ `0xC0000000`。
+**为什么栈放在 `0x07F00000`？**
+这是团队讨论结论（结论 7），和参考项目 2 一致。`0x07F00000` 接近 3GB 位置，更接近真实 Linux 用户空间布局。栈向下增长 256KB，范围 `0x07EC0000` ~ `0x07F00000`。
 
 **为什么用输出参数而不是返回值？**
 Loader 需要输出两个值（`entry` 和 `stack_top`），但返回值已被占用（表示成功/失败）。用指针输出是 C 的惯用做法，调用者（main.c）这样使用：
@@ -367,7 +372,7 @@ main.c
   │    │
   │    └─ elf_setup_stack(pmem, stack_top)        ← elf_stack.c
   │         ├─ mem_map(pmem, base, 256KB, RW, "stack")
-  │         └─ *stack_top = 0xC0000000
+  │         └─ *stack_top = 0x07F00000
   │
   ├─ cpu.pc = entry                          ← CPU 模块拿到入口（李特）
   ├─ cpu.regs[REG_SP] = stack_top            ← CPU 模块拿到栈指针（李特）
@@ -461,7 +466,7 @@ src/src/loader/
 | 6 | `cpu.pc` 和 `cpu.regs[REG_SP]` 字段确认存在 | 李特 | types.h:117-118 |
 | 7 | `REG_SP` = 2 已在 types.h 枚举中定义 | 李特 | types.h:35 |
 | 8 | `PhysicalMemory` 的 `size` 字段默认 128MB | 焕聪 | memory.h:28 |
-| 9 | 栈基址 `0xC0000000`，大小 256KB，范围 `0xBFFC0000` ~ `0xC0000000`（团队结论 7） | 全体讨论 | ✅ 已确定 |
+| 9 | 栈基址 `0x07F00000`，大小 256KB，范围 `0x07EC0000` ~ `0x07F00000`（团队结论 7） | 全体讨论 | ✅ 已确定 |
 | 10 | `mmu_map_page` 标志位使用 PTE_*（`PTE_VALID=1, PTE_READ=2, PTE_WRITE=4, PTE_EXEC=8, PTE_USER=16`），与 MEM_* 值不同，需通过 `mem_perm_to_pte_flags()` 转换（见公共类型定义） | 焕聪 | ✅ 已确定 |
 | 11 | `elf_load` 输出了 `entry` 和 `stack_top`，main.c 里谁来写 `cpu.pc` / `cpu.regs[REG_SP]`？ | 李特 | ✅ 已确定：由 main.c 或 `sim_load_elf` 负责写入（见讨论清单结论 7） |
 
@@ -514,7 +519,7 @@ test/loader/gen_minimal_elf.c
 
 | 测试用例 | 说明 | 验收方式 |
 |----------|------|---------|
-| 加载 minimal.elf | `elf_load()` 返回 `true` | `entry` 非零，`stack_top = 0xC0000000` |
+| 加载 minimal.elf | `elf_load()` 返回 `true` | `entry` 非零，`stack_top = 0x07F00000` |
 | 段数据在内存正确位置 | `mmu_read_32(pmem, entry, &Instr)` | 读到的指令 = ELF 第一条指令的编码 |
 | .bss 清零验证 | 写一个有 .bss 段的 ELF | .bss 区域全部为 0 |
 | 栈区域可读写 | 向 `stack_top - 4` 写 `0xCAFEBABE` 再读回 | 读回值 = `0xCAFEBABE` |
@@ -527,8 +532,8 @@ test/loader/gen_minimal_elf.c
 
 | 测试用例 | 验收项 |
 |----------|--------|
-| `stack_top` 值 | `= 0xC0000000` |
-| 栈区域大小 | `0xC0000000 - 0xBFFC0000 = 256KB` |
+| `stack_top` 值 | `= 0x07F00000` |
+| 栈区域大小 | `0x07F00000 - 0x07EC0000 = 256KB` |
 | 栈区域映射 | `mem_map` 已注册名为 "stack" 的区域 |
 | 栈区域权限 | `MEM_READ | MEM_WRITE`（不可执行） |
 
