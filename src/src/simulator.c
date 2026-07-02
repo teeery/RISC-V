@@ -2,6 +2,7 @@
 #include "debugger/debugger.h"   // debugger_check_breakpoint
 #include "cpu/execute.h"         // cpu_execute, cpu_trap
 #include "loader/elf_loader.h"   // elf_load
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +50,7 @@ void sim_init(Simulator *sim)
     sim->single_step = false;
     sim->debug_mode  = false;
 
-    sim->inst_count  = 0;
+    sim->instr_count  = 0;
     sim->cycle_count = 0;
 }
 
@@ -62,7 +63,7 @@ void sim_destroy(Simulator *sim)
             ExceptionType exc = EXC_NONE;
             mmu_write_32(&sim->mmu, &sim->pmem,
                          sim->breakpoints[i].addr,
-                         sim->breakpoints[i].original_insn,
+                         sim->breakpoints[i].original_instr,
                          sim->cpu.priv, &exc);
         }
     }
@@ -99,18 +100,18 @@ void sim_step(Simulator *sim)
 
     /* ① 取指：通过 MMU 读取 32 位指令 */
     ExceptionType exc = EXC_NONE;
-    uint32_t insn;
-    if (!mmu_read_32(&sim->mmu, &sim->pmem, pc, &insn,
+    uint32_t instr;
+    if (!mmu_read_32(&sim->mmu, &sim->pmem, pc, &instr,
                      sim->cpu.priv, &exc)) {
         /* 取指失败 → 触发异常 */
         cpu_trap(sim, (uint32_t)exc, pc);
-        sim->inst_count++;
+        sim->instr_count++;
         sim->cycle_count++;
         return;
     }
 
     /* ② 译码 */
-    DecodedInsn d = cpu_decode(insn);
+    DecodedInstr d = cpu_decode(instr);
 
     /* ③ 执行 */
     uint32_t next_pc = pc + 4;  /* 默认顺序执行 */
@@ -123,7 +124,7 @@ void sim_step(Simulator *sim)
     sim->cpu.regs[0] = 0;
 
     /* ⑥ 统计 */
-    sim->inst_count++;
+    sim->instr_count++;
     sim->cycle_count++;
 
     /* ⑦ 如果执行失败（非法指令），cpu_execute 内部已调 cpu_trap */
@@ -147,5 +148,5 @@ void sim_run(Simulator *sim)
 
     printf("\nSimulation ended.\n");
     printf("Instructions: %" PRIu64 "  Cycles: %" PRIu64 "\n",
-           sim->inst_count, sim->cycle_count);
+           sim->instr_count, sim->cycle_count);
 }
