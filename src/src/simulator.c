@@ -130,6 +130,64 @@ void sim_step(Simulator *sim)
 
     /* ⑦ 如果执行失败（非法指令），cpu_execute 内部已调 cpu_trap */
     (void)ok;
+
+    /* ⑧ syscall 处理：ecall 且无 OS (mtvec==0) → 模拟器直接处理
+     *
+     * RISC-V 的 ecall 只是触发异常，把信息塞进 CSR（mcause/mepc/mtval），
+     * 然后跳到 mtvec 指向的异常处理程序。但裸机程序没有 OS，mtvec=0，
+     * cpu_trap 只能停机（running=false）。
+     *
+     * 这里在停机前拦截：如果发现是 ecall（mcause == EXC_ECALL_M）且
+     * 确实没有异常处理程序（mtvec == 0），模拟器直接执行系统调用：
+     *
+     *   约定（RISC-V Linux syscall ABI）：
+     *     a7 = syscall 编号
+     *     a0 = 参数0 / 返回值
+     *     a1 = 参数1
+     *     a2 = 参数2
+     *
+     *   支持的 syscall：
+     *     93  exit      → 停机（running 保持 false）
+     *     64  write     → fd=1 时从内存读数据 putchar 打印到终端
+     */
+    if (sim->cpu.mcause == EXC_ECALL_M && sim->cpu.mtvec == 0) {
+        uint32_t a7 = sim->cpu.regs[REG_A7];
+
+        switch (a7) {
+        case 93:  /* exit */
+            /* 什么也不做 —— cpu_trap 已经把 running 设为 false */
+            break;
+
+        case 64:  /* write(fd, buf, len) */
+            {
+                uint32_t fd  = sim->cpu.regs[REG_A0];
+                uint32_t buf = sim->cpu.regs[REG_A1];
+                uint32_t len = sim->cpu.regs[REG_A2];
+
+                if (fd == 1) {  /* stdout */
+                    for (uint32_t i = 0; i < len; i++) {
+                        uint8_t ch;
+                        ExceptionType exc2 = EXC_NONE;
+                        if (mmu_read_8(&sim->mmu, &sim->pmem, buf + i, &ch,
+                                       sim->cpu.priv, &exc2)) {
+                            putchar(ch);
+                        }
+                    }
+                    sim->cpu.regs[REG_A0] = len;  /* 返回值：实际写入字节数 */
+                }
+
+                /* 恢复执行：继续下一条指令（pc 已经在 ④ 设为 mepc+4） */
+                sim->cpu.running = true;
+                sim->cpu.mcause  = 0;
+            }
+            break;
+
+        default:
+            printf("[Syscall] Unknown syscall number: %" PRIu32 "\n", a7);
+            /* running 保持 false，停机 */
+            break;
+        }
+    }
 }
 
 /* ── sim_run ───────────────────────────────────────────────────── */

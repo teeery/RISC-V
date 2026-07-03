@@ -17,6 +17,7 @@
 typedef struct {
     /* 通用寄存器 */
     uint32_t regs[32];       // x0-x31，x0 硬连线为 0（每条指令后强制执行 regs[0]=0）
+    uint32_t fregs[32];      // f0-f31 浮点寄存器（F 扩展，IEEE 754 单精度位模式）
 
     /* 程序计数器 */
     uint32_t pc;             // 当前正在执行的指令地址
