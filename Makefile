@@ -11,7 +11,7 @@
 CC       = gcc
 CFLAGS   = -std=c11 -Wall -Wextra -g -O0
 INCLUDES = -Isrc/include
-LDFLAGS  =
+LDFLAGS  = -lm
 
 TARGET   = riscv-sim
 
@@ -21,7 +21,10 @@ SRCS = \
 	src/src/simulator.c \
 	src/src/cpu/cpu.c \
 	src/src/cpu/decode.c \
-	src/src/cpu/execute.c \
+	src/src/cpu/execute/execute.c \
+	src/src/cpu/execute/exec_rv32i.c \
+	src/src/cpu/execute/exec_m.c \
+	src/src/cpu/execute/exec_f.c \
 	src/src/memory/memory.c \
 	src/src/memory/mmu.c \
 	src/src/debugger/debugger.c \
@@ -29,7 +32,8 @@ SRCS = \
 	src/src/loader/elf_load.c \
 	src/src/loader/elf_segment.c \
 	src/src/loader/elf_stack.c \
-	src/src/loader/elf_validate.c
+	src/src/loader/elf_validate.c \
+	src/src/loader/elf_section.c
 
 # ── 自动生成 .o 文件列表 ────────────────────────────────────────
 OBJS = $(SRCS:.c=.o)
@@ -66,7 +70,10 @@ src/src/main.o:            src/src/main.c            src/include/simulator.h src
 src/src/simulator.o:       src/src/simulator.c       src/include/simulator.h src/include/cpu/execute.h src/include/loader/elf_loader.h
 src/src/cpu/cpu.o:         src/src/cpu/cpu.c         src/include/cpu/cpu.h src/include/types.h
 src/src/cpu/decode.o:      src/src/cpu/decode.c      src/include/cpu/decode.h
-src/src/cpu/execute.o:     src/src/cpu/execute.c     src/include/cpu/execute.h src/include/simulator.h
+src/src/cpu/execute/execute.o:     src/src/cpu/execute/execute.c     src/include/cpu/execute.h src/include/simulator.h src/include/cpu/exec_internal.h
+src/src/cpu/execute/exec_rv32i.o:   src/src/cpu/execute/exec_rv32i.c   src/include/cpu/execute.h src/include/cpu/exec_internal.h src/include/simulator.h
+src/src/cpu/execute/exec_m.o:       src/src/cpu/execute/exec_m.c       src/include/cpu/execute.h src/include/cpu/exec_internal.h src/include/simulator.h
+src/src/cpu/execute/exec_f.o:       src/src/cpu/execute/exec_f.c       src/include/cpu/execute.h src/include/cpu/exec_internal.h src/include/simulator.h
 src/src/memory/memory.o:   src/src/memory/memory.c   src/include/memory/memory.h src/include/types.h
 src/src/memory/mmu.o:      src/src/memory/mmu.c      src/include/memory/mmu.h src/include/memory/memory.h
 src/src/debugger/debugger.o:   src/src/debugger/debugger.c   src/include/debugger/debugger.h src/include/simulator.h
