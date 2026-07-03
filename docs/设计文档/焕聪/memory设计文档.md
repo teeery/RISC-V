@@ -186,7 +186,7 @@ bool     mem_load(PhysicalMemory *pmem, uint32_t addr, const uint8_t *data,
                   uint32_t size);
 void     mem_dump(PhysicalMemory *pmem, uint32_t addr, uint32_t len);
 
-// ==================== MMU 层 (12 个) ====================
+// ==================== MMU 层 (13 个) ====================
 
 void     mmu_init(MMUState *mmu);
 bool     mmu_translate(MMUState *mmu, uint32_t vaddr, uint32_t *paddr,

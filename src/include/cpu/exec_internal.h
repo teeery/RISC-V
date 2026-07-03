@@ -57,5 +57,6 @@ bool exec_m_muldiv(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
 bool exec_load_fp (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
 bool exec_store_fp(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
 bool exec_fp_op   (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_fma     (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
 
 #endif /* EXEC_INTERNAL_H */

@@ -24,6 +24,7 @@
 #define RS1(instr)      (((instr) >> 15) & 0x1F)    // [19:15]
 #define RS2(instr)      (((instr) >> 20) & 0x1F)    // [24:20]
 #define FUNCT7(instr)   (((instr) >> 25) & 0x7F)    // [31:25]
+#define RS3(instr)      (((instr) >> 27) & 0x1F)    // [31:27] — R4 格式 FMA 用
 
 /* ── 5 种立即数拼接宏（RISC-V 共 6 种指令格式，其中 R-type 无立即数，其余 5 种各有不同立即数布局）── */
 
@@ -59,6 +60,7 @@ typedef struct DecodedInstr {
     uint8_t  funct3;   // 3 位功能码
     uint8_t  funct7;   // 7 位功能码（R-type 用）
     int32_t  imm;      // 立即数（已符号扩展到 32 位）
+    uint8_t  rs3;      // 源寄存器3号 — R4 格式 FMA 用 [31:27]
 } DecodedInstr;
 
 /* 解码一条 32 位指令 → DecodedInstr */

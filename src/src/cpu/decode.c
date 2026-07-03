@@ -238,6 +238,7 @@ DecodedInstr cpu_decode(uint32_t instr)
     d.funct3=0;
     d.funct7=0;
     d.imm=0;
+    d.rs3=0;
 
     // Step 1 — 用宏提取 opcode / rd / rs1 / rs2 / funct3 / funct7
     d.opcode = OPCODE(instr);
@@ -246,6 +247,7 @@ DecodedInstr cpu_decode(uint32_t instr)
     d.rs2 = RS2(instr);
     d.funct3 = FUNCT3(instr);
     d.funct7 = FUNCT7(instr);
+    d.rs3    = RS3(instr);    // R4 格式 FMA 用 [31:27]，R-type 时 = funct7[6:2]（无影响）
 
     // Step 2 — switch(opcode) 设置 d.imm
     //   提示：每个 case 只需要一行，调对应的 IMM_* 宏

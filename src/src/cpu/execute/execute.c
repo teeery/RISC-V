@@ -20,9 +20,12 @@
  *   0x67 (JALR)      → exec_jalr()      — exec_rv32i.c
  *   0x73 (SYSTEM)    → exec_system()    — exec_rv32i.c
  *   0x0F (FENCE)     → exec_fence()     — exec_rv32i.c
- *   0x07 (LOAD-FP)   → exec_load_fp()   — exec_f.c  [待实现]
- *   0x27 (STORE-FP)  → exec_store_fp()  — exec_f.c  [待实现]
- *   0x43 (OP-FP)     → exec_fp_op()     — exec_f.c  [待实现]
+ *   0x07 (LOAD-FP)   → exec_load_fp()   — exec_f.c
+ *   0x27 (STORE-FP)  → exec_store_fp()  — exec_f.c
+ *   0x43 (OP-FP)     → exec_fp_op()     — exec_f.c
+ *   0x47 (FMA)       → exec_fma()       — exec_f.c
+ *   0x4B (FMA)       → exec_fma()       — exec_f.c
+ *   0x4F (FMA)       → exec_fma()       — exec_f.c
  * ============================================================
  */
 
@@ -127,7 +130,13 @@ bool cpu_execute(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
     /* ── F 扩展 ── */
     case 0x07: return exec_load_fp (sim, dec, next_pc);
     case 0x27: return exec_store_fp(sim, dec, next_pc);
+    /* TODO: OP-FP 标准 opcode 为 0x53，当前暂用 0x43 */
     case 0x43: return exec_fp_op   (sim, dec, next_pc);
+
+    /* ── FMA 融合乘加 (R4 格式，opcode 0x43/0x47/0x4B/0x4F) ── */
+    case 0x47: return exec_fma     (sim, dec, next_pc);
+    case 0x4B: return exec_fma     (sim, dec, next_pc);
+    case 0x4F: return exec_fma     (sim, dec, next_pc);
 
     /* ── 未实现的 opcode → 非法指令异常 ── */
     default:

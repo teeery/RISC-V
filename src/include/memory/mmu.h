@@ -75,15 +75,26 @@ typedef struct {
     uint32_t satp;              // satp CSR 值（MODE | ASID | PPN）
     uint32_t *root_page_table;  // 第一级页表（1024 项 × 4B）
     bool     enabled;           // 是否启用地址翻译
+
+    /* 页表管理器：追踪所有第二级页表（PPN → 宿主机指针） */
+    struct {
+        uint32_t  *ppns;        // 物理页号数组
+        uint32_t **tables;      // 对应的宿主机指针数组
+        int        count;
+        int        capacity;
+    } pt_mgr;
 } MMUState;
 
 /* ============================================================
- * 接口（12 个）
+ * 接口（13 个）
  * ============================================================
  */
 
-/* 初始化 MMU（satp = 0, 分配根页表） */
+/* 初始化 MMU（satp = 0, 分配根页表 + 页表管理器） */
 void mmu_init(MMUState *mmu);
+
+/* 销毁 MMU — 释放根页表、所有第二级页表、页表管理器 */
+void mmu_destroy(MMUState *mmu);
 
 /* 虚拟地址 → 物理地址（Sv32 页表遍历 + 权限检查）
  *

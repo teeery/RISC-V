@@ -75,7 +75,7 @@ void sim_destroy(Simulator *sim)
     sim->bp_capacity  = 0;
 
     mem_destroy(&sim->pmem);
-    /* mmu 的根页表由 mmu_init 分配的 calloc，暂不单独释放 */
+    mmu_destroy(&sim->mmu);
 }
 
 /* ── sim_load_elf ──────────────────────────────────────────────── */
