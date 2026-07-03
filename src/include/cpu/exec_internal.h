@@ -34,28 +34,28 @@ typedef struct Simulator Simulator;
  * RV32I 基础指令（exec_rv32i.c）
  * ============================================================== */
 
-bool exec_lui    (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_auipc  (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_op_imm (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_op     (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_load   (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_store  (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_branch (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_jal    (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_jalr   (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_system (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_fence  (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
+bool exec_lui    (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_auipc  (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_op_imm (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_op     (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_load   (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_store  (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_branch (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_jal    (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_jalr   (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_system (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_fence  (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
 
 /* ================================================================
  * M 扩展 — 乘除法 8 条指令（exec_m.c）
  * ============================================================== */
-bool exec_m_muldiv(Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
+bool exec_m_muldiv(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
 
 /* ================================================================
  * F 扩展 — 单精度浮点 26 条指令（exec_f.c）
  * ============================================================== */
-bool exec_load_fp (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_store_fp(Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
-bool exec_fp_op   (Simulator *sim, DecodedInstr *d, uint32_t *next_pc);
+bool exec_load_fp (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_store_fp(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
+bool exec_fp_op   (Simulator *sim, DecodedInstr *dec, uint32_t *next_pc);
 
 #endif /* EXEC_INTERNAL_H */

@@ -24,10 +24,10 @@
  *   rd = imm[31:12] << 12（低 12 位自动填 0）
  * ════════════════════════════════════════════════════════════
  */
-bool exec_lui(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_lui(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;
-    sim->cpu.regs[d->rd] = (uint32_t)d->imm;
+    sim->cpu.regs[dec->rd] = (uint32_t)dec->imm;
     return true;
 }
 
@@ -36,10 +36,10 @@ bool exec_lui(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *   rd = pc + (imm[31:12] << 12)
  * ════════════════════════════════════════════════════════════
  */
-bool exec_auipc(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_auipc(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;
-    sim->cpu.regs[d->rd] = sim->cpu.pc + (uint32_t)d->imm;
+    sim->cpu.regs[dec->rd] = sim->cpu.pc + (uint32_t)dec->imm;
     return true;
 }
 
@@ -50,47 +50,47 @@ bool exec_auipc(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *              / SLLI / SRLI / SRAI
  * ════════════════════════════════════════════════════════════
  */
-bool exec_op_imm(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_op_imm(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;
     CPU *cpu = &sim->cpu;
-    int32_t  src  = (int32_t)cpu->regs[d->rs1];
-    int32_t  imm  = d->imm;
+    int32_t  src  = (int32_t)cpu->regs[dec->rs1];
+    int32_t  imm  = dec->imm;
     uint32_t shamt = imm & 0x1F;  /* SLLI/SRLI/SRAI 只用低 5 位 */
 
-    switch (d->funct3) {
+    switch (dec->funct3) {
     case 0: /* ADDI */
-        cpu->regs[d->rd] = (uint32_t)(src + imm);
+        cpu->regs[dec->rd] = (uint32_t)(src + imm);
         break;
     case 2: /* SLTI — 有符号比较 */
-        cpu->regs[d->rd] = (src < imm) ? 1 : 0;
+        cpu->regs[dec->rd] = (src < imm) ? 1 : 0;
         break;
     case 3: /* SLTIU — 无符号比较 */
-        cpu->regs[d->rd] = ((uint32_t)src < (uint32_t)imm) ? 1 : 0;
+        cpu->regs[dec->rd] = ((uint32_t)src < (uint32_t)imm) ? 1 : 0;
         break;
     case 4: /* XORI */
-        cpu->regs[d->rd] = (uint32_t)src ^ (uint32_t)imm;
+        cpu->regs[dec->rd] = (uint32_t)src ^ (uint32_t)imm;
         break;
     case 5: /* SRLI / SRAI — funct7[5] 区分 */
-        if (d->funct7 == 0x20) {
+        if (dec->funct7 == 0x20) {
             /* SRAI：算术右移（符号扩展） */
-            cpu->regs[d->rd] = (uint32_t)(src >> (int32_t)shamt);
+            cpu->regs[dec->rd] = (uint32_t)(src >> (int32_t)shamt);
         } else {
             /* SRLI：逻辑右移（零扩展） */
-            cpu->regs[d->rd] = (uint32_t)src >> shamt;
+            cpu->regs[dec->rd] = (uint32_t)src >> shamt;
         }
         break;
     case 6: /* ORI */
-        cpu->regs[d->rd] = (uint32_t)src | (uint32_t)imm;
+        cpu->regs[dec->rd] = (uint32_t)src | (uint32_t)imm;
         break;
     case 7: /* ANDI */
-        cpu->regs[d->rd] = (uint32_t)src & (uint32_t)imm;
+        cpu->regs[dec->rd] = (uint32_t)src & (uint32_t)imm;
         break;
     case 1: /* SLLI */
-        cpu->regs[d->rd] = (uint32_t)src << shamt;
+        cpu->regs[dec->rd] = (uint32_t)src << shamt;
         break;
     default:
-        cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+        cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
         return false;
     }
     return true;
@@ -107,56 +107,56 @@ bool exec_op_imm(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *     funct7 == 0x20  → SUB/SRA（与 0x00 共用 funct3）
  * ════════════════════════════════════════════════════════════
  */
-bool exec_op(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_op(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;
     CPU *cpu = &sim->cpu;
 
     /* ── M 扩展分流 ── */
-    if (d->funct7 == 1) {
-        return exec_m_muldiv(sim, d, next_pc);
+    if (dec->funct7 == 1) {
+        return exec_m_muldiv(sim, dec, next_pc);
     }
 
-    uint32_t rs1_val = cpu->regs[d->rs1];
-    uint32_t rs2_val = cpu->regs[d->rs2];
+    uint32_t rs1_val = cpu->regs[dec->rs1];
+    uint32_t rs2_val = cpu->regs[dec->rs2];
     int32_t  s1 = (int32_t)rs1_val;
     int32_t  s2 = (int32_t)rs2_val;
 
-    switch (d->funct3) {
+    switch (dec->funct3) {
     case 0: /* ADD / SUB */
-        if (d->funct7 == 0x20) {
-            cpu->regs[d->rd] = (uint32_t)(s1 - s2);       /* SUB */
+        if (dec->funct7 == 0x20) {
+            cpu->regs[dec->rd] = (uint32_t)(s1 - s2);       /* SUB */
         } else {
-            cpu->regs[d->rd] = rs1_val + rs2_val;         /* ADD */
+            cpu->regs[dec->rd] = rs1_val + rs2_val;         /* ADD */
         }
         break;
     case 1: /* SLL — 逻辑左移 */
-        cpu->regs[d->rd] = rs1_val << (rs2_val & 0x1F);
+        cpu->regs[dec->rd] = rs1_val << (rs2_val & 0x1F);
         break;
     case 2: /* SLT — 有符号比较 */
-        cpu->regs[d->rd] = (s1 < s2) ? 1 : 0;
+        cpu->regs[dec->rd] = (s1 < s2) ? 1 : 0;
         break;
     case 3: /* SLTU — 无符号比较 */
-        cpu->regs[d->rd] = (rs1_val < rs2_val) ? 1 : 0;
+        cpu->regs[dec->rd] = (rs1_val < rs2_val) ? 1 : 0;
         break;
     case 4: /* XOR */
-        cpu->regs[d->rd] = rs1_val ^ rs2_val;
+        cpu->regs[dec->rd] = rs1_val ^ rs2_val;
         break;
     case 5: /* SRL / SRA */
-        if (d->funct7 == 0x20) {
-            cpu->regs[d->rd] = (uint32_t)(s1 >> (int32_t)(rs2_val & 0x1F)); /* SRA */
+        if (dec->funct7 == 0x20) {
+            cpu->regs[dec->rd] = (uint32_t)(s1 >> (int32_t)(rs2_val & 0x1F)); /* SRA */
         } else {
-            cpu->regs[d->rd] = rs1_val >> (rs2_val & 0x1F);                /* SRL */
+            cpu->regs[dec->rd] = rs1_val >> (rs2_val & 0x1F);                /* SRL */
         }
         break;
     case 6: /* OR */
-        cpu->regs[d->rd] = rs1_val | rs2_val;
+        cpu->regs[dec->rd] = rs1_val | rs2_val;
         break;
     case 7: /* AND */
-        cpu->regs[d->rd] = rs1_val & rs2_val;
+        cpu->regs[dec->rd] = rs1_val & rs2_val;
         break;
     default:
-        cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+        cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
         return false;
     }
     return true;
@@ -169,22 +169,22 @@ bool exec_op(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *   地址 = rs1 + sign-extend(imm)
  * ════════════════════════════════════════════════════════════
  */
-bool exec_load(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_load(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;
     CPU *cpu = &sim->cpu;
 
-    uint32_t addr = cpu->regs[d->rs1] + (uint32_t)d->imm;
+    uint32_t addr = cpu->regs[dec->rs1] + (uint32_t)dec->imm;
     ExceptionType exc = EXC_NONE;
 
-    switch (d->funct3) {
+    switch (dec->funct3) {
     case 0: { /* LB — 有符号字节加载 */
         uint8_t val8;
         if (!mmu_read_8(&sim->mmu, &sim->pmem, addr, &val8, cpu->priv, &exc)) {
             cpu_trap(sim, (uint32_t)exc, addr);
             return false;
         }
-        cpu->regs[d->rd] = (uint32_t)(int32_t)(int8_t)val8;  /* 符号扩展 */
+        cpu->regs[dec->rd] = (uint32_t)(int32_t)(int8_t)val8;  /* 符号扩展 */
         break;
     }
     case 1: { /* LH — 有符号半字加载 */
@@ -193,7 +193,7 @@ bool exec_load(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
             cpu_trap(sim, (uint32_t)exc, addr);
             return false;
         }
-        cpu->regs[d->rd] = (uint32_t)(int32_t)(int16_t)val16;  /* 符号扩展 */
+        cpu->regs[dec->rd] = (uint32_t)(int32_t)(int16_t)val16;  /* 符号扩展 */
         break;
     }
     case 2: { /* LW — 字加载 */
@@ -202,7 +202,7 @@ bool exec_load(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
             cpu_trap(sim, (uint32_t)exc, addr);
             return false;
         }
-        cpu->regs[d->rd] = val32;
+        cpu->regs[dec->rd] = val32;
         break;
     }
     case 4: { /* LBU — 无符号字节加载 */
@@ -211,7 +211,7 @@ bool exec_load(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
             cpu_trap(sim, (uint32_t)exc, addr);
             return false;
         }
-        cpu->regs[d->rd] = (uint32_t)val8;  /* 零扩展 */
+        cpu->regs[dec->rd] = (uint32_t)val8;  /* 零扩展 */
         break;
     }
     case 5: { /* LHU — 无符号半字加载 */
@@ -220,11 +220,11 @@ bool exec_load(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
             cpu_trap(sim, (uint32_t)exc, addr);
             return false;
         }
-        cpu->regs[d->rd] = (uint32_t)val16;  /* 零扩展 */
+        cpu->regs[dec->rd] = (uint32_t)val16;  /* 零扩展 */
         break;
     }
     default:
-        cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+        cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
         return false;
     }
     return true;
@@ -237,16 +237,16 @@ bool exec_load(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *   地址 = rs1 + sign-extend(imm)，数据 = rs2 的低位
  * ════════════════════════════════════════════════════════════
  */
-bool exec_store(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_store(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;
     CPU *cpu = &sim->cpu;
 
-    uint32_t addr = cpu->regs[d->rs1] + (uint32_t)d->imm;
-    uint32_t data = cpu->regs[d->rs2];
+    uint32_t addr = cpu->regs[dec->rs1] + (uint32_t)dec->imm;
+    uint32_t data = cpu->regs[dec->rs2];
     ExceptionType exc = EXC_NONE;
 
-    switch (d->funct3) {
+    switch (dec->funct3) {
     case 0: /* SB */
         mmu_write_8(&sim->mmu, &sim->pmem, addr, (uint8_t)(data & 0xFF),
                     cpu->priv, &exc);
@@ -259,7 +259,7 @@ bool exec_store(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
         mmu_write_32(&sim->mmu, &sim->pmem, addr, data, cpu->priv, &exc);
         break;
     default:
-        cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+        cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
         return false;
     }
 
@@ -277,17 +277,17 @@ bool exec_store(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *   条件满足时 *next_pc = pc + imm，否则保持 pc+4
  * ════════════════════════════════════════════════════════════
  */
-bool exec_branch(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_branch(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     CPU *cpu = &sim->cpu;
 
-    uint32_t rs1_val = cpu->regs[d->rs1];
-    uint32_t rs2_val = cpu->regs[d->rs2];
+    uint32_t rs1_val = cpu->regs[dec->rs1];
+    uint32_t rs2_val = cpu->regs[dec->rs2];
     int32_t  s1 = (int32_t)rs1_val;
     int32_t  s2 = (int32_t)rs2_val;
     bool     taken = false;
 
-    switch (d->funct3) {
+    switch (dec->funct3) {
     case 0: /* BEQ  — 相等 */
         taken = (rs1_val == rs2_val);
         break;
@@ -307,12 +307,12 @@ bool exec_branch(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
         taken = (rs1_val >= rs2_val);
         break;
     default:
-        cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+        cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
         return false;
     }
 
     if (taken) {
-        *next_pc = cpu->pc + (uint32_t)d->imm;
+        *next_pc = cpu->pc + (uint32_t)dec->imm;
     }
     return true;
 }
@@ -323,12 +323,12 @@ bool exec_branch(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *   next_pc = pc + imm（跳转目标）
  * ════════════════════════════════════════════════════════════
  */
-bool exec_jal(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_jal(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     CPU *cpu = &sim->cpu;
 
-    cpu->regs[d->rd] = cpu->pc + 4;
-    *next_pc = cpu->pc + (uint32_t)d->imm;
+    cpu->regs[dec->rd] = cpu->pc + 4;
+    *next_pc = cpu->pc + (uint32_t)dec->imm;
     return true;
 }
 
@@ -338,12 +338,12 @@ bool exec_jal(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *   next_pc = (rs1 + imm) & ~1（最低位清零对齐）
  * ════════════════════════════════════════════════════════════
  */
-bool exec_jalr(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_jalr(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     CPU *cpu = &sim->cpu;
 
-    cpu->regs[d->rd] = cpu->pc + 4;
-    *next_pc = (cpu->regs[d->rs1] + (uint32_t)d->imm) & ~1u;
+    cpu->regs[dec->rd] = cpu->pc + 4;
+    *next_pc = (cpu->regs[dec->rs1] + (uint32_t)dec->imm) & ~1u;
     return true;
 }
 
@@ -354,28 +354,28 @@ bool exec_jalr(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *   CSR 指令暂不实现 → 非法指令
  * ════════════════════════════════════════════════════════════
  */
-bool exec_system(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_system(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     CPU *cpu = &sim->cpu;
 
-    switch (d->funct3) {
+    switch (dec->funct3) {
     case 0:
-        if (d->imm == 0) {                    /* ECALL */
+        if (dec->imm == 0) {                    /* ECALL */
             cpu_trap(sim, EXC_ECALL_M, 0);
-        } else if (d->imm == 1) {             /* EBREAK */
+        } else if (dec->imm == 1) {             /* EBREAK */
             cpu_trap(sim, EXC_BREAKPOINT, cpu->pc);
-        } else if (d->imm == 0x302) {         /* MRET */
+        } else if (dec->imm == 0x302) {         /* MRET */
             cpu->priv = (cpu->mstatus >> 11) & 0x3;   /* MPP → priv */
             cpu->mstatus = (cpu->mstatus & ~(1u << 7))
                          | ((cpu->mstatus >> 3) & 1) << 3;  /* MPIE→MIE */
             *next_pc = cpu->mepc;              /* 返回异常地址 */
         } else {
-            cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+            cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
             return false;
         }
         break;
     default:
-        cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+        cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
         return false;
     }
     return true;
@@ -386,10 +386,10 @@ bool exec_system(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *   单核模拟器中无需实现真实屏障，只做 PC+4
  * ════════════════════════════════════════════════════════════
  */
-bool exec_fence(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_fence(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)sim;
-    (void)d;
+    (void)dec;
     (void)next_pc;
     /* NOP: *next_pc 已由调用方设为 pc+4 */
     return true;
