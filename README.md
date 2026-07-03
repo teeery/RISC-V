@@ -6,20 +6,66 @@
 
 ```
 risc-v/
-├── src/                    # 源代码
-│   ├── include/            # 头文件目录
-│   └── src/                # 主程序目录
-│       ├── cpu/            # CPU 模拟 ——分工：李特
-│       ├── debugger/       # 调试器 ——分工：嘉俊
-│       ├── loader/         # ELF 加载器 ——分工：嘉华
-│       └── memory/         # 内存管理 ——分工：焕聪
-├── docs/                   # 文档与参考资料
+├── src/
+│   ├── include/                     # 公共头文件
+│   │   ├── simulator.h              #   模拟器顶层接口
+│   │   ├── types.h                  #   公共类型定义
+│   │   ├── cpu/
+│   │   │   ├── cpu.h                #   CPU 模拟
+│   │   │   ├── decode.h             #   指令译码
+│   │   │   └── execute.h            #   指令执行
+│   │   ├── debugger/
+│   │   │   └── debugger.h           #   调试器
+│   │   ├── loader/
+│   │   │   └── elf_loader.h         #   ELF 加载器
+│   │   └── memory/
+│   │       ├── memory.h             #   物理内存
+│   │       └── mmu.h                #   MMU / Sv32 页表
+│   ├── src/                         # 模块实现
+│   │   ├── main.c                   #   入口 + 命令行解析
+│   │   ├── simulator.c              #   模拟器主循环
+│   │   ├── cpu/                     # CPU ——分工：李特
+│   │   │   ├── cpu.c
+│   │   │   ├── decode.c
+│   │   │   └── execute.c
+│   │   ├── debugger/                # 调试器 ——分工：嘉俊
+│   │   │   ├── debugger.c
+│   │   │   └── breakpoint.c
+│   │   ├── loader/                  # ELF 加载器 ——分工：嘉华
+│   │   │   ├── elf_load.c
+│   │   │   ├── elf_segment.c
+│   │   │   ├── elf_stack.c
+│   │   │   ├── elf_validate.c
+│   │   │   └── loader_internal.h
+│   │   └── memory/                  # 内存管理 ——分工：焕聪
+│   │       ├── memory.c
+│   │       └── mmu.c
+│   └── test/                        # 单元测试 & 测试夹具
+│       ├── e2e_test.c               #   端到端测试
+│       ├── cpu/
+│       │   ├── decode_test.c
+│       │   └── execute_test.c
+│       ├── loader/
+│       │   ├── test_load.c
+│       │   ├── test_validate.c
+│       │   ├── gen_minimal_elf.c    #   测试用 ELF 生成器
+│       │   └── minimal.elf
+│       └── e2e/
+│           ├── gen_hello_elf.c      #   hello.elf 生成器
+│           └── hello.elf
+├── docs/                            # 文档与参考资料
 │   ├── 前置知识/
-│   │   ├── 计算机知识.md    # 从零开始的计算机底层知识
-│   │   └── 数据流.md        # 从 C 程序到模拟器执行的完整数据流追踪
-│   ├── 设计文档/              # 各模块设计文档（编码前必写）
-│   ├── 参考项目结构1/       # 参考项目结构（单层目录）
-│   └── 参考项目结构2/       # 参考项目结构（模块化目录）
+│   │   ├── 计算机知识.md
+│   │   ├── 数据流.md
+│   │   └── RISC-V指令编码学习笔记.md
+│   ├── 设计文档/
+│   │   ├── 共同部分/                 #   公共约定
+│   │   ├── 李特/                    #   CPU 设计文档
+│   │   ├── 嘉俊/                    #   调试器设计文档
+│   │   ├── 嘉华/                    #   Loader 设计文档
+│   │   └── 焕聪/                    #   Memory 设计文档
+│   └── 参考项目结构1/ 参考项目结构2/
+├── build/                           # 编译产物
 └── README.md
 ```
 
@@ -50,18 +96,24 @@ risc-v/
 
 ## 构建
 
-```bash
-make          # 编译模拟器
-make clean    # 清理
-```
+使用 Visual Studio 打开 `src/` 文件夹（Folder 项目），直接生成即可。编译产物输出到 `build/` 目录。
+
+| 产物 | 说明 |
+|------|------|
+| `build/riscv-sim.exe` | 模拟器主程序 |
+| `build/execute_test.exe` | CPU 执行单元测试 |
+| `build/decode_test.exe` | CPU 译码单元测试 |
+| `build/test_load.exe` | Loader 测试 |
+| `build/e2e_test.exe` | 端到端测试 |
 
 ## 运行
 
 ```bash
-./riscv-sim test/hello.elf      # 直接运行
-./riscv-sim -s test/hello.elf   # 调试模式
-./riscv-sim -t -s test/hello.elf # 调试 + 指令跟踪
+./build/riscv-sim src/test/e2e/hello.elf          # 直接运行
+./build/riscv-sim -s src/test/e2e/hello.elf        # 调试模式（进入交互式 Debugger REPL）
 ```
+
+`-t`（指令跟踪）已预留但尚未实现。
 
 ## 设计文档
 
@@ -100,6 +152,12 @@ make clean    # 清理
 
 - **[参考项目结构1](docs/参考项目结构1/)** — 单层 `include/` + `src/` 目录，所有模块平铺放置。适合小规模快速开发。
 - **[参考项目结构2](docs/参考项目结构2/)** — 模块化目录，每个子系统（cpu/debugger/loader/memory/syscall）独立文件夹。适合多人协作分模块开发。
+
+## 版本记录
+
+| 版本 | 日期 | 说明 |
+|------|------|------|
+| [v0.1.0](https://github.com/teeery/risc-v/releases/tag/v0.1.0) | 2026-07-02 | 首个可运行版本：完整 RV32I 指令执行、ELF 加载器、CPU 单元测试 |
 
 ## 参考资料
 
