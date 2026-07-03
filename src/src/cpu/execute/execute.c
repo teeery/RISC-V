@@ -127,7 +127,13 @@ bool cpu_execute(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
     /* ── F 扩展 ── */
     case 0x07: return exec_load_fp (sim, d, next_pc);
     case 0x27: return exec_store_fp(sim, d, next_pc);
+    /* TODO: OP-FP 标准 opcode 为 0x53，当前暂用 0x43 */
     case 0x43: return exec_fp_op   (sim, d, next_pc);
+
+    /* ── FMA 融合乘加 (R4 格式，opcode 0x43/0x47/0x4B/0x4F) ── */
+    case 0x47: return exec_fma     (sim, d, next_pc);
+    case 0x4B: return exec_fma     (sim, d, next_pc);
+    case 0x4F: return exec_fma     (sim, d, next_pc);
 
     /* ── 未实现的 opcode → 非法指令异常 ── */
     default:
