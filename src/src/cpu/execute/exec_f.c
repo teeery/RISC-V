@@ -52,14 +52,14 @@
 #include <math.h>
 
 /* ── FLW: 从内存加载 32 位浮点数 ────────────────────────────── */
-bool exec_load_fp(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_load_fp(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;
-    uint32_t addr = sim->cpu.regs[d->rs1] + (uint32_t)d->imm;
+    uint32_t addr = sim->cpu.regs[dec->rs1] + (uint32_t)dec->imm;
     uint32_t val;
     ExceptionType exc = EXC_NONE;
     if(mmu_read_32(&sim->mmu, &sim->pmem, addr, &val, sim->cpu.priv, &exc)) {
-        sim->cpu.fregs[d->rd] = val;   // 直接存 IEEE 754 位模式
+        sim->cpu.fregs[dec->rd] = val;   // 直接存 IEEE 754 位模式
         return true;
     } else {
         cpu_trap(sim, (uint32_t)exc, addr);
@@ -70,11 +70,11 @@ bool exec_load_fp(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
 }
 
 /* ── FSW: 将 32 位浮点数写入内存 ────────────────────────────── */
-bool exec_store_fp(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_store_fp(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;
-    uint32_t addr = sim->cpu.regs[d->rs1] + (uint32_t)d->imm;
-    uint32_t data = sim->cpu.fregs[d->rs2];  // 从浮点寄存器读位模式
+    uint32_t addr = sim->cpu.regs[dec->rs1] + (uint32_t)dec->imm;
+    uint32_t data = sim->cpu.fregs[dec->rs2];  // 从浮点寄存器读位模式
     ExceptionType exc = EXC_NONE;
     if (mmu_write_32(&sim->mmu, &sim->pmem, addr, data, sim->cpu.priv, &exc)) {
         return true;
@@ -89,83 +89,84 @@ bool exec_store_fp(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
 typedef union { uint32_t u; float f; } fp32_t;
 
 /* ── FP 运算：FADD/FSUB/FMUL/FDIV/FSQRT/FMIN/FMAX/FCVT/FMV/... ─ */
-bool exec_fp_op(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_fp_op(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;   // FP 运算不改变 PC
 
-    fp32_t a, b, r;
+    /* op_a/op_b = 浮点操作数, res = 浮点结果 (IEEE 754 位模式) */
+    fp32_t op_a, op_b, res;
     uint32_t bits;
     int32_t  s32;
     uint32_t u32;
 
-    switch (d->funct7) {
+    switch (dec->funct7) {
 
     /* ── 四则运算：FADD.S / FSUB.S / FMUL.S / FDIV.S ──────────── */
     case 0x00: /* FADD.S */
-        a.u = sim->cpu.fregs[d->rs1];
-        b.u = sim->cpu.fregs[d->rs2];
-        r.f = a.f + b.f;
-        sim->cpu.fregs[d->rd] = r.u;
+        op_a.u = sim->cpu.fregs[dec->rs1];
+        op_b.u = sim->cpu.fregs[dec->rs2];
+        res.f = op_a.f + op_b.f;
+        sim->cpu.fregs[dec->rd] = res.u;
         return true;
 
     case 0x04: /* FSUB.S */
-        a.u = sim->cpu.fregs[d->rs1];
-        b.u = sim->cpu.fregs[d->rs2];
-        r.f = a.f - b.f;
-        sim->cpu.fregs[d->rd] = r.u;
+        op_a.u = sim->cpu.fregs[dec->rs1];
+        op_b.u = sim->cpu.fregs[dec->rs2];
+        res.f = op_a.f - op_b.f;
+        sim->cpu.fregs[dec->rd] = res.u;
         return true;
 
     case 0x08: /* FMUL.S */
-        a.u = sim->cpu.fregs[d->rs1];
-        b.u = sim->cpu.fregs[d->rs2];
-        r.f = a.f * b.f;
-        sim->cpu.fregs[d->rd] = r.u;
+        op_a.u = sim->cpu.fregs[dec->rs1];
+        op_b.u = sim->cpu.fregs[dec->rs2];
+        res.f = op_a.f * op_b.f;
+        sim->cpu.fregs[dec->rd] = res.u;
         return true;
 
     case 0x0C: /* FDIV.S */
-        a.u = sim->cpu.fregs[d->rs1];
-        b.u = sim->cpu.fregs[d->rs2];
-        r.f = a.f / b.f;
-        sim->cpu.fregs[d->rd] = r.u;
+        op_a.u = sim->cpu.fregs[dec->rs1];
+        op_b.u = sim->cpu.fregs[dec->rs2];
+        res.f = op_a.f / op_b.f;
+        sim->cpu.fregs[dec->rd] = res.u;
         return true;
 
     /* ── 平方根：FSQRT.S ───────────────────────────────────────── */
     case 0x2C: /* FSQRT.S */
-        a.u = sim->cpu.fregs[d->rs1];
-        r.f = sqrtf(a.f);
-        sim->cpu.fregs[d->rd] = r.u;
+        op_a.u = sim->cpu.fregs[dec->rs1];
+        res.f = sqrtf(op_a.f);
+        sim->cpu.fregs[dec->rd] = res.u;
         return true;
 
     /* ── 符号注入：FSGNJ.S / FSGNJN.S / FSGNJX.S (funct3=0/1/2) ─ */
     case 0x10:
-        bits = sim->cpu.fregs[d->rs1] & 0x7FFFFFFF;   // rs1 数值部分（去掉符号）
-        switch (d->funct3) {
+        bits = sim->cpu.fregs[dec->rs1] & 0x7FFFFFFF;   // rs1 数值部分（去掉符号）
+        switch (dec->funct3) {
         case 0: /* FSGNJ.S — 用 rs2 的符号 */
-            sim->cpu.fregs[d->rd] = bits | (sim->cpu.fregs[d->rs2] & 0x80000000);
+            sim->cpu.fregs[dec->rd] = bits | (sim->cpu.fregs[dec->rs2] & 0x80000000);
             return true;
         case 1: /* FSGNJN.S — 用 rs2 的反符号 */
-            sim->cpu.fregs[d->rd] = bits | (~sim->cpu.fregs[d->rs2] & 0x80000000);
+            sim->cpu.fregs[dec->rd] = bits | (~sim->cpu.fregs[dec->rs2] & 0x80000000);
             return true;
         case 2: /* FSGNJX.S — XOR 符号 */
-            sim->cpu.fregs[d->rd] = (sim->cpu.fregs[d->rs1] & 0x7FFFFFFF)
-                                  | ((sim->cpu.fregs[d->rs1]
-                                     ^ sim->cpu.fregs[d->rs2]) & 0x80000000);
+            sim->cpu.fregs[dec->rd] = (sim->cpu.fregs[dec->rs1] & 0x7FFFFFFF)
+                                  | ((sim->cpu.fregs[dec->rs1]
+                                     ^ sim->cpu.fregs[dec->rs2]) & 0x80000000);
             return true;
         }
         break;
 
     /* ── 最值：FMIN.S / FMAX.S (funct3=0/1) ───────────────────── */
     case 0x14:
-        a.u = sim->cpu.fregs[d->rs1];
-        b.u = sim->cpu.fregs[d->rs2];
-        switch (d->funct3) {
+        op_a.u = sim->cpu.fregs[dec->rs1];
+        op_b.u = sim->cpu.fregs[dec->rs2];
+        switch (dec->funct3) {
         case 0: /* FMIN.S */
-            r.f = fminf(a.f, b.f);
-            sim->cpu.fregs[d->rd] = r.u;
+            res.f = fminf(op_a.f, op_b.f);
+            sim->cpu.fregs[dec->rd] = res.u;
             return true;
         case 1: /* FMAX.S */
-            r.f = fmaxf(a.f, b.f);
-            sim->cpu.fregs[d->rd] = r.u;
+            res.f = fmaxf(op_a.f, op_b.f);
+            sim->cpu.fregs[dec->rd] = res.u;
             return true;
         }
         break;
@@ -173,71 +174,71 @@ bool exec_fp_op(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
     /* ── 比较：FLE.S / FLT.S / FEQ.S (funct3=0/1/2) ──────────── */
     /* 结果写入整数寄存器 */
     case 0x50:
-        a.u = sim->cpu.fregs[d->rs1];
-        b.u = sim->cpu.fregs[d->rs2];
-        switch (d->funct3) {
+        op_a.u = sim->cpu.fregs[dec->rs1];
+        op_b.u = sim->cpu.fregs[dec->rs2];
+        switch (dec->funct3) {
         case 0: /* FLE.S — rs1 <= rs2 */
-            sim->cpu.regs[d->rd] = (a.f <= b.f) ? 1 : 0;
+            sim->cpu.regs[dec->rd] = (op_a.f <= op_b.f) ? 1 : 0;
             return true;
         case 1: /* FLT.S — rs1 < rs2 */
-            sim->cpu.regs[d->rd] = (a.f < b.f) ? 1 : 0;
+            sim->cpu.regs[dec->rd] = (op_a.f < op_b.f) ? 1 : 0;
             return true;
         case 2: /* FEQ.S — rs1 == rs2 */
-            sim->cpu.regs[d->rd] = (a.f == b.f) ? 1 : 0;
+            sim->cpu.regs[dec->rd] = (op_a.f == op_b.f) ? 1 : 0;
             return true;
         }
         break;
 
     /* ── float → 整数：FCVT.W.S / FCVT.WU.S (rs2=0/1) ────────── */
     case 0x60:
-        a.u = sim->cpu.fregs[d->rs1];
-        if (d->rs2 == 0) {
+        op_a.u = sim->cpu.fregs[dec->rs1];
+        if (dec->rs2 == 0) {
             /* FCVT.W.S — 有符号 */
-            s32 = (int32_t)a.f;      // C 截断向零，符合 RISC-V RTZ
-            sim->cpu.regs[d->rd] = (uint32_t)s32;
+            s32 = (int32_t)op_a.f;      // C 截断向零，符合 RISC-V RTZ
+            sim->cpu.regs[dec->rd] = (uint32_t)s32;
         } else {
             /* FCVT.WU.S — 无符号 */
-            u32 = (uint32_t)a.f;     // C 截断向零
-            sim->cpu.regs[d->rd] = u32;
+            u32 = (uint32_t)op_a.f;     // C 截断向零
+            sim->cpu.regs[dec->rd] = u32;
         }
         return true;
 
     /* ── 整数 → float：FCVT.S.W / FCVT.S.WU (rs2=0/1) ────────── */
     case 0x68:
-        if (d->rs2 == 0) {
+        if (dec->rs2 == 0) {
             /* FCVT.S.W */
-            s32 = (int32_t)sim->cpu.regs[d->rs1];
-            r.f = (float)s32;
+            s32 = (int32_t)sim->cpu.regs[dec->rs1];
+            res.f = (float)s32;
         } else {
             /* FCVT.S.WU */
-            u32 = sim->cpu.regs[d->rs1];
-            r.f = (float)u32;
+            u32 = sim->cpu.regs[dec->rs1];
+            res.f = (float)u32;
         }
-        sim->cpu.fregs[d->rd] = r.u;
+        sim->cpu.fregs[dec->rd] = res.u;
         return true;
 
     /* ── freg → 整数：FMV.X.W / FCLASS.S (funct3=0/1) ────────── */
     case 0x70:
-        switch (d->funct3) {
+        switch (dec->funct3) {
         case 0: /* FMV.X.W — 浮点寄存器位拷贝到整数寄存器 */
-            sim->cpu.regs[d->rd] = sim->cpu.fregs[d->rs1];
+            sim->cpu.regs[dec->rd] = sim->cpu.fregs[dec->rs1];
             return true;
         case 1: { /* FCLASS.S — 返回 rs1 的浮点类型码 */
-            a.u = sim->cpu.fregs[d->rs1];
-            int sign  = (a.u >> 31) & 1;
-            int exp   = (a.u >> 23) & 0xFF;
-            int mant  = a.u & 0x7FFFFF;
+            op_a.u = sim->cpu.fregs[dec->rs1];
+            int sign  = (op_a.u >> 31) & 1;
+            int exp   = (op_a.u >> 23) & 0xFF;
+            int mant  = op_a.u & 0x7FFFFF;
 
             if (exp == 0 && mant == 0)
-                sim->cpu.regs[d->rd] = sign ? (1 << 3) : (1 << 4);   // ±0
+                sim->cpu.regs[dec->rd] = sign ? (1 << 3) : (1 << 4);   // ±0
             else if (exp == 0)
-                sim->cpu.regs[d->rd] = sign ? (1 << 2) : (1 << 5);   // ±subnormal
+                sim->cpu.regs[dec->rd] = sign ? (1 << 2) : (1 << 5);   // ±subnormal
             else if (exp == 0xFF && mant == 0)
-                sim->cpu.regs[d->rd] = sign ? (1 << 0) : (1 << 7);   // ±∞
+                sim->cpu.regs[dec->rd] = sign ? (1 << 0) : (1 << 7);   // ±∞
             else if (exp == 0xFF && mant != 0)
-                sim->cpu.regs[d->rd] = sign ? (1 << 8) : (1 << 9);   // ±NaN(quiet/signal)
+                sim->cpu.regs[dec->rd] = sign ? (1 << 8) : (1 << 9);   // ±NaN(quiet/signal)
             else
-                sim->cpu.regs[d->rd] = sign ? (1 << 1) : (1 << 6);   // ±normal
+                sim->cpu.regs[dec->rd] = sign ? (1 << 1) : (1 << 6);   // ±normal
             return true;
         }
         }
@@ -245,13 +246,13 @@ bool exec_fp_op(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
 
     /* ── 整数 → freg：FMV.W.X (funct3=0) ───────────────────────── */
     case 0x78: /* FMV.W.X */
-        sim->cpu.fregs[d->rd] = sim->cpu.regs[d->rs1];
+        sim->cpu.fregs[dec->rd] = sim->cpu.regs[dec->rs1];
         return true;
 
-    } /* switch(d->funct7) */
+    } /* switch(dec->funct7) */
 
     /* 未识别的 funct7 */
-    cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+    cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
     return false;
 }
 
@@ -266,27 +267,28 @@ bool exec_fp_op(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  * opcode: 0x43=FMADD, 0x47=FMSUB, 0x4B=FNMSUB, 0x4F=FNMADD
  * fmt (bit[26:25]) = 00 表示单精度 .S
  *
- * TODO: 用 fmaf() 替代 a*b+c 以获得单次舍入的精确结果
+ * TODO: 用 fmaf() 替代 op_a*op_b+op_c 以获得单次舍入的精确结果
  * ================================================================== */
-bool exec_fma(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_fma(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;
 
-    fp32_t a, b, c, r;
-    a.u = sim->cpu.fregs[d->rs1];
-    b.u = sim->cpu.fregs[d->rs2];
-    c.u = sim->cpu.fregs[d->rs3];       // R4 格式：第三源寄存器
+    /* op_a/op_b/op_c = 操作数, res = 结果 */
+    fp32_t op_a, op_b, op_c, res;
+    op_a.u = sim->cpu.fregs[dec->rs1];
+    op_b.u = sim->cpu.fregs[dec->rs2];
+    op_c.u = sim->cpu.fregs[dec->rs3];       // R4 格式：第三源寄存器
 
-    switch (d->opcode) {
-    case 0x43: r.f = a.f * b.f + c.f; break;      // FMADD.S
-    case 0x47: r.f = a.f * b.f - c.f; break;      // FMSUB.S
-    case 0x4B: r.f = -(a.f * b.f) + c.f; break;   // FNMSUB.S
-    case 0x4F: r.f = -(a.f * b.f) - c.f; break;   // FNMADD.S
+    switch (dec->opcode) {
+    case 0x43: res.f = op_a.f * op_b.f + op_c.f; break;      // FMADD.S
+    case 0x47: res.f = op_a.f * op_b.f - op_c.f; break;      // FMSUB.S
+    case 0x4B: res.f = -(op_a.f * op_b.f) + op_c.f; break;   // FNMSUB.S
+    case 0x4F: res.f = -(op_a.f * op_b.f) - op_c.f; break;   // FNMADD.S
     default:
-        cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+        cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
         return false;
     }
 
-    sim->cpu.fregs[d->rd] = r.u;
+    sim->cpu.fregs[dec->rd] = res.u;
     return true;
 }
