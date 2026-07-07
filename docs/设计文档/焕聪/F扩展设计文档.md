@@ -18,7 +18,8 @@ CPU 执行循环 (execute.c)
     │
     ├─ 0x07 (LOAD-FP)   → exec_load_fp()    ─┐
     ├─ 0x27 (STORE-FP)  → exec_store_fp()    │
-    ├─ 0x43 (OP-FP)     → exec_fp_op()       ├── exec_f.c
+    ├─ 0x53 (OP-FP)     → exec_fp_op()       ├── exec_f.c
+    ├─ 0x43 (FMADD)     → exec_fma()         │
     ├─ 0x47 (FMSUB)     → exec_fma()         │
     ├─ 0x4B (FNMSUB)    → exec_fma()         │
     └─ 0x4F (FNMADD)    → exec_fma()        ─┘
@@ -34,7 +35,7 @@ exec_f.c
   ├── simulator.h        — Simulator* 访问 mmu/pmem/cpu
   ├── memory/mmu.h       — mmu_read_32 / mmu_write_32
   ├── types.h            — ExceptionType, PrivilegeLevel
-  └── <math.h>           — sqrtf, fminf, fmaxf
+  └── <math.h>           — sqrtf, fminf, fmaxf, fmaf
 ```
 
 **不依赖：** Loader、Debugger、exec_rv32i.c 等其他执行文件。
@@ -50,7 +51,7 @@ exec_f.c
 | `FLW rd, imm(rs1)` | 0x07 | I-type | 从内存读 32 位浮点数到 `fregs[rd]` |
 | `FSW rs2, imm(rs1)` | 0x27 | S-type | 将 `fregs[rs2]` 的 32 位写入内存 |
 
-### 2.2 OP-FP 运算（20 条，opcode=0x43，funct7 区分）
+### 2.2 OP-FP 运算（20 条，opcode=0x53，funct7 区分）
 
 | funct7 | 指令 | rs2 / funct3 | 说明 |
 |--------|------|-------------|------|
@@ -119,19 +120,19 @@ FLW/FSW 使用标准 I-type / S-type（和 LW/SW 相同），OP-FP 使用 R-type
 ```
 R-type（OP-FP，如 FADD.S）：
   31        25 24    20 19    15 14    12 11    7 6       0
- ┌───────────┬────────┬────────┬────────┬───────┬────────────┐
- │  funct7   │  rs2   │  rs1   │ funct3 │  rd   │  opcode   │
- └───────────┴────────┴────────┴────────┴───────┴────────────┘
+ ┌───────────┬────────┬────────┬────────┬───────┬──────────┐
+ │  funct7   │  rs2   │  rs1   │ funct3 │  rd   │  0x53   │
+ └───────────┴────────┴────────┴────────┴───────┴──────────┘
 
 R4 格式（FMA，如 FMADD.S）：
   31    27 26   25 24    20 19    15 14    12 11    7 6       0
  ┌───────┬──────┬────────┬────────┬────────┬───────┬──────────┐
  │  rs3  │ fmt  │  rs2   │  rs1   │ funct3 │  rd   │ opcode  │
  └───────┴──────┴────────┴────────┴────────┴───────┴──────────┘
-   [31:27] [1:0]                                0x43/47/4B/4F
+   [31:27] [1:0]                        0x43/0x47/0x4B/0x4F
 ```
 
-FMA 的 `rs3` 字段（bits [31:27]）在 R-type 中对应 `funct7[6:2]`，因此新增 `RS3` 宏而无须改变已有 decode 逻辑。`fmt` 字段（bits [26:25]）为 00 代表单精度 `.S`。
+FMA 的 `rs3` 字段（bits [31:27]）在 R-type 中对应 `funct7[6:2]`，因此新增 `RS3` 宏而无须改变已有 decode 逻辑。`fmt` 字段（bits [26:25]）解码时混入 `funct7` 低 2 位，`exec_fma` 通过 `d->funct7 & 0x3 ≠ 0` 校验单精度 `.S`。
 
 ### 3.4 4 个分发函数
 
@@ -163,7 +164,28 @@ bool exec_store_fp(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
 }
 
 // exec_fp_op — 20 条 OP-FP，switch(d->funct7) 分发
-// exec_fma   — 4 条 FMA，  switch(d->opcode) 分发
+//
+// exec_fma   — 4 条 FMA（fmt 校验 + fmaf 单次舍入）
+bool exec_fma(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+{
+    // fmt 非单精度 (.S) → 非法指令
+    if ((d->funct7 & 0x3) != 0) {
+        cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+        return false;
+    }
+    fp32_t a, b, c, r;
+    a.u = sim->cpu.fregs[d->rs1];
+    b.u = sim->cpu.fregs[d->rs2];
+    c.u = sim->cpu.fregs[d->rs3];       // R4 格式：第三源寄存器
+    switch (d->opcode) {
+    case 0x43: r.f = fmaf(a.f, b.f, c.f);  break;   // a×b + c
+    case 0x47: r.f = fmaf(a.f, b.f, -c.f); break;   // a×b - c
+    case 0x4B: r.f = fmaf(-a.f, b.f, c.f); break;   // -a×b + c
+    case 0x4F: r.f = -fmaf(a.f, b.f, c.f); break;   // -a×b - c
+    }
+    sim->cpu.fregs[d->rd] = r.u;
+    return true;
+}
 ```
 
 ### 3.5 FLW/FSW 与 LW/SW 的对比
@@ -214,7 +236,6 @@ memory 模块将 4 字节作为位模式读回，不关心解释为 `int` 还是
 |------|------|
 | fcsr 寄存器 | 舍入模式 + 异常标志；CPU.fcsr 字段空间已在 cpu.h 预留，exec_f.c 暂不写 fcsr |
 | D 扩展（双精度） | 需 64 位 load/store/运算 + 新的 `mmu_read_64` / `mmu_write_64` |
-| FMA 单次舍入 | 当前为 `a.f * b.f + c.f`（两次舍入），与真实硬件的单次舍入有 1 ulp 差异 |
 
 ---
 
