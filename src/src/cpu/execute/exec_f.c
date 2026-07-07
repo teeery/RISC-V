@@ -4,7 +4,7 @@
  * 指令分布：
  *   opcode=0x07 LOAD-FP:  FLW         — 从内存加载 32 位浮点数到 fregs
  *   opcode=0x27 STORE-FP: FSW         — 将 fregs 中的 32 位浮点数写入内存
- *   opcode=0x43 OP-FP:    浮点运算指令（funct7 区分具体操作）
+ *   opcode=0x53 OP-FP:    浮点运算指令（funct7 区分具体操作）
  *
  * OP-FP 内部按 funct7 分为：
  *   funct7=0x00: FADD.S   — 浮点加法
@@ -264,24 +264,29 @@ bool exec_fp_op(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
  *  └───────┴──────┴───────┴───────┴───────┴───────┴─────────┘
  *
  * opcode: 0x43=FMADD, 0x47=FMSUB, 0x4B=FNMSUB, 0x4F=FNMADD
- * fmt (bit[26:25]) = 00 表示单精度 .S
- *
- * TODO: 用 fmaf() 替代 a*b+c 以获得单次舍入的精确结果
+ * fmt (bit[26:25]) = 00 表示单精度 .S；嵌在 funct7 低 2 位中
  * ================================================================== */
 bool exec_fma(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
 {
     (void)next_pc;
+
+    /* 非单精度 (.S) 的 fmt 值 → 非法指令 */
+    if ((d->funct7 & 0x3) != 0) {
+        cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+        return false;
+    }
 
     fp32_t a, b, c, r;
     a.u = sim->cpu.fregs[d->rs1];
     b.u = sim->cpu.fregs[d->rs2];
     c.u = sim->cpu.fregs[d->rs3];       // R4 格式：第三源寄存器
 
+    /* 使用 fmaf() 实现单次舍入（与真实硬件一致） */
     switch (d->opcode) {
-    case 0x43: r.f = a.f * b.f + c.f; break;      // FMADD.S
-    case 0x47: r.f = a.f * b.f - c.f; break;      // FMSUB.S
-    case 0x4B: r.f = -(a.f * b.f) + c.f; break;   // FNMSUB.S
-    case 0x4F: r.f = -(a.f * b.f) - c.f; break;   // FNMADD.S
+    case 0x43: r.f = fmaf(a.f, b.f, c.f);  break;     // FMADD.S:  a×b + c
+    case 0x47: r.f = fmaf(a.f, b.f, -c.f); break;     // FMSUB.S:  a×b - c
+    case 0x4B: r.f = fmaf(-a.f, b.f, c.f); break;     // FNMSUB.S: -a×b + c
+    case 0x4F: r.f = -fmaf(a.f, b.f, c.f); break;     // FNMADD.S: -a×b - c
     default:
         cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
         return false;
