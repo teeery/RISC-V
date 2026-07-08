@@ -20,9 +20,12 @@
  *   0x67 (JALR)      → exec_jalr()      — exec_rv32i.c
  *   0x73 (SYSTEM)    → exec_system()    — exec_rv32i.c
  *   0x0F (FENCE)     → exec_fence()     — exec_rv32i.c
- *   0x07 (LOAD-FP)   → exec_load_fp()   — exec_f.c  [待实现]
- *   0x27 (STORE-FP)  → exec_store_fp()  — exec_f.c  [待实现]
- *   0x43 (OP-FP)     → exec_fp_op()     — exec_f.c  [待实现]
+ *   0x07 (LOAD-FP)   → exec_load_fp()   — exec_f.c
+ *   0x27 (STORE-FP)  → exec_store_fp()  — exec_f.c
+ *   0x43 (OP-FP)     → exec_fp_op()     — exec_f.c
+ *   0x47 (FMA)       → exec_fma()       — exec_f.c
+ *   0x4B (FMA)       → exec_fma()       — exec_f.c
+ *   0x4F (FMA)       → exec_fma()       — exec_f.c
  * ============================================================
  */
 
@@ -59,26 +62,26 @@ void cpu_trap(Simulator *sim, uint32_t exc, uint32_t tval)
 {
     CPU *cpu = &sim->cpu;
 
-    /* ① mepc — 记录"出事的指令在哪" */
+    /* （1）mepc — 记录"出事的指令在哪" */
     cpu->mepc = cpu->pc;
 
-    /* ② mcause — 记录"出了什么事" */
+    /* （2）mcause — 记录"出了什么事" */
     cpu->mcause = exc;
 
-    /* ③ mtval — 记录"附加信息" */
+    /* （3）mtval — 记录"附加信息" */
     cpu->mtval = tval;
 
-    /* ④ mstatus — 更新 MPP / MPIE / MIE */
+    /* （4）mstatus — 更新 MPP / MPIE / MIE */
     uint32_t old_priv_bits = (cpu->priv & 0x3) << 11;
     uint32_t old_mie_bit   = (cpu->mstatus >> 3) & 1;
 
     cpu->mstatus &= ~((0x3u << 11) | (1u << 7) | (1u << 3));
     cpu->mstatus |= old_priv_bits | (old_mie_bit << 7);
 
-    /* ⑤ 切到机器态 */
+    /* （5）切到机器态 */
     cpu->priv = PRIV_MACHINE;
 
-    /* ⑥ 跳转到异常处理程序或停机 */
+    /* （6）跳转到异常处理程序或停机 */
     if (cpu->mtvec != 0) {
         cpu->pc = cpu->mtvec & ~0x3u;
     } else {
@@ -102,42 +105,42 @@ void cpu_trap(Simulator *sim, uint32_t exc, uint32_t tval)
  * 默认设置 *next_pc = pc + 4（顺序执行），分支/跳转指令会覆盖。
  * ============================================================
  */
-bool cpu_execute(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool cpu_execute(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     CPU *cpu = &sim->cpu;
 
     /* 默认顺序执行 */
     *next_pc = cpu->pc + 4;
 
-    switch (d->opcode) {
+    switch (dec->opcode) {
 
     /* ── RV32I ── */
-    case 0x37: return exec_lui    (sim, d, next_pc);
-    case 0x17: return exec_auipc  (sim, d, next_pc);
-    case 0x13: return exec_op_imm (sim, d, next_pc);
-    case 0x33: return exec_op     (sim, d, next_pc);
-    case 0x03: return exec_load   (sim, d, next_pc);
-    case 0x23: return exec_store  (sim, d, next_pc);
-    case 0x63: return exec_branch (sim, d, next_pc);
-    case 0x6F: return exec_jal    (sim, d, next_pc);
-    case 0x67: return exec_jalr   (sim, d, next_pc);
-    case 0x73: return exec_system (sim, d, next_pc);
-    case 0x0F: return exec_fence  (sim, d, next_pc);
+    case 0x37: return exec_lui    (sim, dec, next_pc);
+    case 0x17: return exec_auipc  (sim, dec, next_pc);
+    case 0x13: return exec_op_imm (sim, dec, next_pc);
+    case 0x33: return exec_op     (sim, dec, next_pc);
+    case 0x03: return exec_load   (sim, dec, next_pc);
+    case 0x23: return exec_store  (sim, dec, next_pc);
+    case 0x63: return exec_branch (sim, dec, next_pc);
+    case 0x6F: return exec_jal    (sim, dec, next_pc);
+    case 0x67: return exec_jalr   (sim, dec, next_pc);
+    case 0x73: return exec_system (sim, dec, next_pc);
+    case 0x0F: return exec_fence  (sim, dec, next_pc);
 
     /* ── F 扩展 ── */
-    case 0x07: return exec_load_fp (sim, d, next_pc);
-    case 0x27: return exec_store_fp(sim, d, next_pc);
-    case 0x53: return exec_fp_op   (sim, d, next_pc);  /* OP-FP (RISC-V 标准) */
+    case 0x07: return exec_load_fp (sim, dec, next_pc);
+    case 0x27: return exec_store_fp(sim, dec, next_pc);
+    case 0x53: return exec_fp_op   (sim, dec, next_pc);  /* OP-FP (RISC-V 标准) */
 
     /* ── FMA 融合乘加 (R4 格式，opcode 0x43/0x47/0x4B/0x4F) ── */
-    case 0x43: return exec_fma     (sim, d, next_pc);
-    case 0x47: return exec_fma     (sim, d, next_pc);
-    case 0x4B: return exec_fma     (sim, d, next_pc);
-    case 0x4F: return exec_fma     (sim, d, next_pc);
+    case 0x43: return exec_fma     (sim, dec, next_pc);
+    case 0x47: return exec_fma     (sim, dec, next_pc);
+    case 0x4B: return exec_fma     (sim, dec, next_pc);
+    case 0x4F: return exec_fma     (sim, dec, next_pc);
 
     /* ── 未实现的 opcode → 非法指令异常 ── */
     default:
-        cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
+        cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
         return false;
     }
 }

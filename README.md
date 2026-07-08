@@ -41,7 +41,6 @@ risc-v/
 │   │       ├── memory.c
 │   │       └── mmu.c
 │   └── test/                        # 单元测试 & 测试夹具
-│       ├── e2e_test.c               #   端到端测试
 │       ├── cpu/
 │       │   ├── decode_test.c
 │       │   └── execute_test.c
@@ -51,6 +50,7 @@ risc-v/
 │       │   ├── gen_minimal_elf.c    #   测试用 ELF 生成器
 │       │   └── minimal.elf
 │       └── e2e/
+│           ├── e2e_test.c           #   端到端测试
 │           ├── gen_hello_elf.c      #   hello.elf 生成器
 │           └── hello.elf
 ├── docs/                            # 文档与参考资料

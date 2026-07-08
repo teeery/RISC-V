@@ -268,6 +268,7 @@ DecodedInstr cpu_decode(uint32_t instr)
         case 0x13: // OP-IMM
         case 0x0F: // FENCE
         case 0x73: //SYSTEM
+        case 0x07: // LOAD-FP (FLW) — I-type，同 Load
             d.imm = IMM_I(instr);
             break;
 
@@ -276,13 +277,18 @@ DecodedInstr cpu_decode(uint32_t instr)
             break;
 
         case 0x23: // Store
+        case 0x27: // STORE-FP (FSW) — S-type，同 Store
             d.imm = IMM_S(instr);
             break;
-        
-        case 0x33: // OP
-            d.imm = 0; // R-type 没有立即数
+
+        case 0x33: // OP (R-type)
+        case 0x43: // OP-FP (R-type)
+        case 0x47: // FMA  (R4-type)
+        case 0x4B: // FMA
+        case 0x4F: // FMA
+            d.imm = 0; // R-type / R4-type 没有传统立即数
             break;
-      
+
         default:
             d.opcode = 0; // 非法指令，设 opcode=0，execute.c 会处理异常
             break;
@@ -409,6 +415,10 @@ void cpu_disasm(uint32_t instr, uint32_t pc, char *buf, size_t bufsz)
 
     // ── R-type：rd, rs1, rs2 ────────────────────────────
     case 0x33:
+    case 0x43: // OP-FP
+    case 0x47: // FMA
+    case 0x4B: // FMA
+    case 0x4F: // FMA
         snprintf(buf, bufsz, "%-7s %s, %s, %s",
                  name,
                  reg_names[d.rd],
@@ -429,6 +439,7 @@ void cpu_disasm(uint32_t instr, uint32_t pc, char *buf, size_t bufsz)
 
     // ── I-type Load：rd, imm(rs1) ──────────────────────
     case 0x03:
+    case 0x07: // LOAD-FP (FLW)
         snprintf(buf, bufsz, "%-7s %s, %d(%s)",
                  name,
                  reg_names[d.rd],
@@ -438,6 +449,7 @@ void cpu_disasm(uint32_t instr, uint32_t pc, char *buf, size_t bufsz)
 
     // ── S-type：rs2, imm(rs1) ──────────────────────────
     case 0x23:
+    case 0x27: // STORE-FP (FSW)
         snprintf(buf, bufsz, "%-7s %s, %d(%s)",
                  name,
                  reg_names[d.rs2],

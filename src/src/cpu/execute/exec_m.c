@@ -15,17 +15,10 @@
  * （由 exec_rv32i.c 中的 exec_op() 在 funct7==1 时分流）
  *
  * 边界情况：
- *   - 除零：DIV/DIVU → 商 = -1 (全1)，余 = 被除数
- *   - 溢出：DIV(-2^31, -1) → 商 = -2^31 (即 0x80000000)，余 = 0
- *   - MULH/MULHSU/MULHU：需要 64 位中间结果（(int64_t)a * (int64_t)b）
+ *   - 除零：DIV/DIVU  → 商 = -1 (全1)；REM/REMU → 余 = 被除数
+ *   - 溢出：DIV(-2^31, -1) → 商 = -2^31 (0x80000000)；REM → 余 = 0
+ *   - 乘法：MULH/MULHSU/MULHU 用 64 位中间结果 ((u)int64_t)，再取高/低 32 位
  * ============================================================
- *
- * 开发说明：
- *   - 所有操作数来自 cpu->regs[d->rs1] 和 cpu->regs[d->rs2]
- *   - 结果写入 cpu->regs[d->rd]
- *   - 使用 (int64_t) 强转做 64 位乘法，再取高/低 32 位
- *
- * 待实现：全部 8 条指令。
  */
 
 #include "cpu/execute.h"
@@ -34,36 +27,78 @@
 #include "types.h"
 #include "cpu/exec_internal.h"
 
-bool exec_m_muldiv(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
+bool exec_m_muldiv(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
-    (void)sim;
-    (void)d;
-    (void)next_pc;
+    (void)next_pc;  // 当前所有 M 指令均不修改 next_pc
 
-    /* TODO: 实现 8 条乘除法指令
-     *
-     * CPU *cpu = &sim->cpu;
-     * uint32_t a = cpu->regs[d->rs1];
-     * uint32_t b = cpu->regs[d->rs2];
-     *
-     * switch (d->funct3) {
-     * case 0: // MUL
-     *     cpu->regs[d->rd] = a * b;
-     *     break;
-     * case 4: // DIV
-     *     if (b == 0) {
-     *         cpu->regs[d->rd] = (uint32_t)(-1);
-     *     } else if ((int32_t)a == INT32_MIN && (int32_t)b == -1) {
-     *         cpu->regs[d->rd] = (uint32_t)INT32_MIN;
-     *     } else {
-     *         cpu->regs[d->rd] = (uint32_t)((int32_t)a / (int32_t)b);
-     *     }
-     *     break;
-     * ...
-     * }
-     */
+    /* dec = 解码后的指令, op_a/op_b = 从寄存器文件读出的操作数 */
+    CPU *cpu = &sim->cpu;
+    uint32_t op_a = cpu->regs[dec->rs1];  // 操作数 A（rs1 的值）
+    uint32_t op_b = cpu->regs[dec->rs2];  // 操作数 B（rs2 的值）
 
-    /* 暂未实现 → 触发非法指令异常 */
-    cpu_trap(sim, EXC_ILLEGAL_INST, d->opcode);
-    return false;
+    switch (dec->funct3){
+        case 0: { /* MUL — 乘法低 32 位（有符号/无符号结果相同） */
+            uint64_t product = (uint64_t)op_a * (uint64_t)op_b;
+            cpu->regs[dec->rd] = (uint32_t)(product & 0xFFFFFFFFu);
+            return true;
+        }
+        case 1: { /* MULH — 有符号 × 有符号 → 高 32 位 */
+            int64_t product = (int64_t)(int32_t)op_a * (int64_t)(int32_t)op_b;
+            cpu->regs[dec->rd] = (uint32_t)((uint64_t)product >> 32);
+            return true;
+        }
+        case 2: { /* MULHSU — 有符号 × 无符号 → 高 32 位 */
+            int64_t product = (int64_t)(int32_t)op_a * (int64_t)(uint64_t)op_b;
+            cpu->regs[dec->rd] = (uint32_t)((uint64_t)product >> 32);
+            return true;
+        }
+        case 3: { /* MULHU — 无符号 × 无符号 → 高 32 位 */
+            uint64_t product = (uint64_t)op_a * (uint64_t)op_b;
+            cpu->regs[dec->rd] = (uint32_t)(product >> 32);
+            return true;
+        }
+        case 4: { /* DIV — 有符号除法（除零=-1，溢出=被除数） */
+            int32_t dividend = (int32_t)op_a;
+            int32_t divisor  = (int32_t)op_b;
+            if (divisor == 0) {
+                cpu->regs[dec->rd] = (uint32_t)-1;          // 除零 → 全 1
+            } else if (dividend == INT32_MIN && divisor == -1) {
+                cpu->regs[dec->rd] = (uint32_t)INT32_MIN;   // 溢出 → 被除数
+            } else {
+                cpu->regs[dec->rd] = (uint32_t)(dividend / divisor);
+            }
+            return true;
+        }
+        case 5: { /* DIVU — 无符号除法（除零=全1） */
+            if (op_b == 0) {
+                cpu->regs[dec->rd] = (uint32_t)-1;          // 除零 → 全 1
+            } else {
+                cpu->regs[dec->rd] = op_a / op_b;
+            }
+            return true;
+        }
+        case 6: { /* REM — 有符号取余（除零=被除数，溢出=0） */
+            int32_t dividend = (int32_t)op_a;
+            int32_t divisor  = (int32_t)op_b;
+            if (divisor == 0) {
+                cpu->regs[dec->rd] = op_a;                  // 除零 → 被除数
+            } else if (dividend == INT32_MIN && divisor == -1) {
+                cpu->regs[dec->rd] = 0;                     // 溢出 → 0
+            } else {
+                cpu->regs[dec->rd] = (uint32_t)(dividend % divisor);
+            }
+            return true;
+        }
+        case 7: { /* REMU — 无符号取余（除零=被除数） */
+            if (op_b == 0) {
+                cpu->regs[dec->rd] = op_a;                  // 除零 → 被除数
+            } else {
+                cpu->regs[dec->rd] = op_a % op_b;
+            }
+            return true;
+        }
+        default:
+            cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
+            return false;
+    }
 }

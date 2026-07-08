@@ -11,7 +11,7 @@
  * 编译（从项目根目录）：
  *   gcc -std=c11 -Wall -Wextra -Isrc/include -Isrc/src/loader \
  *       -o build/e2e_test \
- *       src/test/e2e_test.c \
+ *       src/test/e2e/e2e_test.c \
  *       src/src/simulator.c \
  *       src/src/cpu/cpu.c src/src/cpu/decode.c src/src/cpu/execute.c \
  *       src/src/memory/memory.c src/src/memory/mmu.c \
