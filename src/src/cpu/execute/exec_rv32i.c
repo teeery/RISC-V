@@ -17,6 +17,7 @@
 #include "memory/mmu.h"
 #include "types.h"
 #include "cpu/exec_internal.h"
+#include "linux/syscall.h"
 #include <stdio.h>
 
 /* ════════════════════════════════════════════════════════════
@@ -361,7 +362,7 @@ bool exec_system(Simulator *sim, DecodedInstr *d, uint32_t *next_pc)
     switch (d->funct3) {
     case 0:
         if (d->imm == 0) {                    /* ECALL */
-            cpu_trap(sim, EXC_ECALL_M, 0);
+            syscall_handler(sim);
         } else if (d->imm == 1) {             /* EBREAK */
             cpu_trap(sim, EXC_BREAKPOINT, cpu->pc);
         } else if (d->imm == 0x302) {         /* MRET */
