@@ -154,6 +154,7 @@ void syscall_handler(Simulator *sim)
     default:
         fprintf(stderr, "[syscall] unknown syscall number: %u\n", a7);
         sim->cpu.regs[REG_A0] = (uint32_t)-1;
+        sim->cpu.running = false;   // 未知 syscall → 停机（旧 cpu_trap 行为）
         break;
     }
 }

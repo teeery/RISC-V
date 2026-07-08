@@ -93,26 +93,27 @@ int main(void) {
     write32(f, 84);            // p_offset = 数据在文件中的偏移
     write32(f, 0x00010000);    // p_vaddr  = 虚拟地址
     write32(f, 0x00010000);    // p_paddr  = 物理地址（恒等映射）
-    write32(f, 8);             // p_filesz = 文件中的数据大小（2 条指令 = 8 字节）
-    write32(f, 8);             // p_memsz  = 内存中大小（无 .bss，= filesz）
+    write32(f, 12);            // p_filesz = 文件中的数据大小（3 条指令 = 12 字节）
+    write32(f, 12);            // p_memsz  = 内存中大小（无 .bss，= filesz）
     write32(f, PF_R | PF_X);   // p_flags  = 5 (R+X)
     write32(f, 0x1000);        // p_align  = 4KB 页对齐
 
     /*
      * ═══════════════════════════════════════════════
-     * 第 3 部分：代码段数据（8 字节）
+     * 第 3 部分：代码段数据（12 字节）
      * ═══════════════════════════════════════════════
      *
      * addi a0, zero, 42 → a0 = 42（返回值寄存器）
-     * ecall              → 触发系统调用
+     * addi a7, zero, 93 → a7 = 93（syscall 号 = exit）
+     * ecall              → 触发 exit(42)
      *
      * RISC-V 指令编码（小端序）：
      *   addi x10, x0, 42  → 0x02A00513
-     *     imm[11:0]=42, rs1=x0, funct3=000, rd=x10, opcode=0010011
+     *   addi x17, x0, 93  → 0x05D00893
      *   ecall             → 0x00000073
-     *     imm=0, funct3=000, rd=0, opcode=1110011
      */
     write32(f, 0x02A00513);  // addi a0, zero, 42
+    write32(f, 0x05D00893);  // addi a7, zero, 93
     write32(f, 0x00000073);  // ecall
 
     fclose(f);

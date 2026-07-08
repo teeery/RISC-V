@@ -87,13 +87,13 @@ int main(void)
         CHECK(sim.cpu.regs[REG_ZERO] == 0,
               "x0 == 0 (hardwired zero)");
 
-        /* 执行了恰好 2 条指令：addi + ecall */
-        CHECK(sim.instr_count == 2,
-              "instruction count == 2 (addi + ecall)");
+        /* 执行了恰好 3 条指令：addi a0 + addi a7 + ecall */
+        CHECK(sim.instr_count == 3,
+              "instruction count == 3 (addi a0 + addi a7 + ecall)");
 
-        /* ecall 触发 EXC_ECALL_M */
-        CHECK(sim.cpu.mcause == EXC_ECALL_M,
-              "mcause == EXC_ECALL_M (ecall trap)");
+        /* exit 后 CPU 应停止运行 */
+        CHECK(sim.cpu.running == false,
+              "cpu.running == false after exit(42)");
 
         sim_destroy(&sim);
     }
