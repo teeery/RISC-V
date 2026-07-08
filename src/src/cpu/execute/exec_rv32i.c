@@ -17,6 +17,7 @@
 #include "memory/mmu.h"
 #include "types.h"
 #include "cpu/exec_internal.h"
+#include "linux/syscall.h"
 #include <stdio.h>
 
 /* ════════════════════════════════════════════════════════════
