@@ -33,7 +33,8 @@ SRCS = \
 	src/src/loader/elf_segment.c \
 	src/src/loader/elf_stack.c \
 	src/src/loader/elf_validate.c \
-	src/src/loader/elf_section.c
+	src/src/loader/elf_section.c \
+	src/src/linux/syscall.c
 
 # ── 自动生成 .o 文件列表 ────────────────────────────────────────
 OBJS = $(SRCS:.c=.o)
@@ -82,3 +83,4 @@ src/src/loader/elf_load.o:     src/src/loader/elf_load.c     src/include/loader/
 src/src/loader/elf_segment.o:  src/src/loader/elf_segment.c  src/include/loader/elf_loader.h src/include/memory/memory.h
 src/src/loader/elf_stack.o:    src/src/loader/elf_stack.c    src/include/loader/elf_loader.h src/include/memory/memory.h
 src/src/loader/elf_validate.o: src/src/loader/elf_validate.c src/include/loader/elf_loader.h
+src/src/linux/syscall.o:    src/src/linux/syscall.c    src/include/linux/syscall.h src/include/simulator.h
