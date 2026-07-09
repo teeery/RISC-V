@@ -7,19 +7,21 @@
  *   ./gen_minimal_elf
  *   → 产出 minimal.elf
  *
- * 生成的 ELF 内容（addi a0, zero, 42; ecall）：
- *   运行后 a0=42，触发 ecall → syscall handler 拿到 a7=???（取决于之前的值）
- *   这个程序的目的不是运行，而是给 Loader 测试提供一个合法的最小 ELF32 文件。
+ * 生成的 ELF 内容（addi a7,zero,93; addi a0,zero,42; ecall）：
+ *   运行后 a7=93(SYS_exit), a0=42，触发 ecall → syscall handler 正常退出。
+ *   这个程序的目的是给 Loader 测试提供一个合法的最小 ELF32 文件，
+ *   同时也供 E2E 测试完整流水线使用。
  *
- * 文件布局（总 92 字节）：
+ * 文件布局（总 96 字节）：
  *   ┌─────────────────┐ 偏移 0x00
  *   │ ELF Header (52B) │
  *   ├─────────────────┤ 偏移 0x34 (52)
  *   │ Program Hdr (32B)│
  *   ├─────────────────┤ 偏移 0x54 (84)
+ *   │ addi a7,zero,93 │  0x05D00893（4 字节，小端序）
  *   │ addi a0,zero,42 │  0x02A00513（4 字节，小端序）
  *   │ ecall           │  0x00000073（4 字节，小端序）
- *   └─────────────────┘ 偏移 0x5C (92)
+ *   └─────────────────┘ 偏移 0x60 (96)
  */
 
 #include <stdio.h>
@@ -103,21 +105,21 @@ int main(void) {
      * 第 3 部分：代码段数据（12 字节）
      * ═══════════════════════════════════════════════
      *
+     * addi a7, zero, 93 → a7 = 93（SYS_exit）
      * addi a0, zero, 42 → a0 = 42（返回值寄存器）
-     * addi a7, zero, 93 → a7 = 93（syscall 号 = exit）
-     * ecall              → 触发 exit(42)
+     * ecall              → 触发系统调用
      *
      * RISC-V 指令编码（小端序）：
-     *   addi x10, x0, 42  → 0x02A00513
      *   addi x17, x0, 93  → 0x05D00893
+     *   addi x10, x0, 42  → 0x02A00513
      *   ecall             → 0x00000073
      */
+    write32(f, 0x05D00893);  // addi a7, zero, 93  (SYS_exit)
     write32(f, 0x02A00513);  // addi a0, zero, 42
-    write32(f, 0x05D00893);  // addi a7, zero, 93
     write32(f, 0x00000073);  // ecall
 
     fclose(f);
-    printf("Generated minimal.elf (92 bytes)\n");
+    printf("Generated minimal.elf (96 bytes)\n");
     printf("  Entry:  0x00010000\n");
     printf("  Segment: 0x00010000 (8 bytes, R+X)\n");
     return 0;

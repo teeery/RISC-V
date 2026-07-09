@@ -2,11 +2,13 @@
 #include "debugger/debugger.h"   // debugger_check_breakpoint
 #include "cpu/execute.h"         // cpu_execute, cpu_trap
 #include "cpu/decode.h"          // DecodedInstr, cpu_decode
+#include "cpu/controller/controller_internal.h"  // sim_step_single/multi/pipeline
 #include "loader/elf_loader.h"   // elf_load
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <windows.h>             // CRITICAL_SECTION
 
 /* ================================================================
  * simulator.c — 模拟器顶层胶水层
@@ -47,9 +49,17 @@ void sim_init(Simulator *sim)
     }
     sim->bp_count = 0;
 
+    /* 默认 CPU 模型：单周期（兼容现有行为） */
+    sim->cpu_model   = MODEL_SINGLE_CYCLE;
+
     /* 非调试模式 */
     sim->single_step = false;
     sim->debug_mode  = false;
+
+    /* 线程安全锁 */
+    sim->sim_lock = malloc(sizeof(CRITICAL_SECTION));
+    if (sim->sim_lock)
+        InitializeCriticalSection((CRITICAL_SECTION *)sim->sim_lock);
 
     sim->instr_count  = 0;
     sim->cycle_count = 0;
@@ -74,6 +84,13 @@ void sim_destroy(Simulator *sim)
     sim->bp_count     = 0;
     sim->bp_capacity  = 0;
 
+    /* 销毁线程锁 */
+    if (sim->sim_lock) {
+        DeleteCriticalSection((CRITICAL_SECTION *)sim->sim_lock);
+        free(sim->sim_lock);
+        sim->sim_lock = NULL;
+    }
+
     mem_destroy(&sim->pmem);
     mmu_destroy(&sim->mmu);
 }
@@ -94,45 +111,42 @@ bool sim_load_elf(Simulator *sim, const char *path)
     return true;
 }
 
-/* ── sim_step ──────────────────────────────────────────────────── */
+/* ── sim_step ────────────────────────────────────────────────────
+ *
+ * CPU 周期推进：根据 cpu_model 分发到对应控制器。
+ *
+ * ┌─────────────────────┬────────────────────────────────┐
+ * │ MODEL_SINGLE_CYCLE  │ 1 调用 = 1 条完整指令          │
+ * │ MODEL_MULTI_CYCLE   │ 1 调用 = 1 个 FSM 状态         │
+ * │ MODEL_PIPELINE      │ 1 调用 = 1 个时钟周期(5 级重叠) │
+ * └─────────────────────┴────────────────────────────────┘
+ *
+ * 所有模式的共同保证：
+ *   - x0 硬连线为 0（各控制器内部执行）
+ *   - 异常通过 cpu_trap() 统一处理
+ *   - 断点和单步在 sim_run() 层面处理
+ * ─────────────────────────────────────────────────────────────── */
 void sim_step(Simulator *sim)
 {
-    uint32_t pc = sim->cpu.pc;
+    switch (sim->cpu_model) {
 
-    /* ① 取指：通过 MMU 读取 32 位指令 */
-    ExceptionType exc = EXC_NONE;
-    uint32_t instr;
-    if (!mmu_read_32(&sim->mmu, &sim->pmem, pc, &instr,
-                     sim->cpu.priv, &exc)) {
-        /* 取指失败 → 触发异常 */
-        cpu_trap(sim, (uint32_t)exc, pc);
-        sim->instr_count++;
-        sim->cycle_count++;
-        return;
+    case MODEL_SINGLE_CYCLE:
+        sim_step_single(sim);
+        break;
+
+    case MODEL_MULTI_CYCLE:
+        sim_step_multi(sim);
+        break;
+
+    case MODEL_PIPELINE:
+        sim_step_pipeline(sim);
+        break;
+
+    default:
+        /* 未知模型 → fallback 到单周期 */
+        sim_step_single(sim);
+        break;
     }
-
-    /* ② 译码 */
-    DecodedInstr d = cpu_decode(instr);
-
-    /* ③ 执行 */
-    uint32_t next_pc = pc + 4;  /* 默认顺序执行 */
-    bool ok = cpu_execute(sim, &d, &next_pc);
-
-    /* ④ 写回：更新 PC */
-    sim->cpu.pc = next_pc;
-
-    /* ⑤ x0 硬连线保护 */
-    sim->cpu.regs[0] = 0;
-
-    /* ⑥ 统计 */
-    sim->instr_count++;
-    sim->cycle_count++;
-
-    /* ⑦ 如果执行失败（非法指令），cpu_execute 内部已调 cpu_trap */
-    (void)ok;
-
-    /* ⑧ ecall 处理已移至 linux/syscall.c — exec_system() 直接调用
-     *    syscall_handler(sim)，不再走 cpu_trap + post-check 路径 */
 }
 
 /* ── sim_run ───────────────────────────────────────────────────── */
@@ -150,7 +164,98 @@ void sim_run(Simulator *sim)
         }
     }
 
+    /* 流水线排空：陷阱触发后，MEM/WB 中的指令仍需完成。
+     * 单周期和多周期在 running=false 时已无未完成工作，
+     * 此处只对流水线模式有影响（其他模式的流水线寄存器全无效）。 */
+    if (sim->cpu_model == MODEL_PIPELINE) {
+        while (1) {
+            bool empty = !sim->pipe.if_id.valid && !sim->pipe.id_ex.valid &&
+                         !sim->pipe.ex_mem.valid && !sim->pipe.mem_wb.valid;
+            if (empty) break;
+            sim_step_pipeline(sim);
+        }
+    }
+
     printf("\nSimulation ended.\n");
     printf("Instructions: %" PRIu64 "  Cycles: %" PRIu64 "\n",
            sim->instr_count, sim->cycle_count);
+}
+
+/* ── sim_reload ───────────────────────────────────────────────────
+ *
+ * 重新初始化模拟器状态，保留 CPU 模型选择和线程锁。
+ * 用于 Web 端"写 C → 编译 → 重新加载"的流程。
+ * ─────────────────────────────────────────────────────────────── */
+void sim_reload(Simulator *sim)
+{
+    /* 恢复所有断点的原始指令 */
+    for (int i = 0; i < sim->bp_count; i++) {
+        if (sim->breakpoints[i].enabled) {
+            ExceptionType exc = EXC_NONE;
+            mmu_write_32(&sim->mmu, &sim->pmem,
+                         sim->breakpoints[i].addr,
+                         sim->breakpoints[i].original_instr,
+                         sim->cpu.priv, &exc);
+        }
+    }
+
+    /* 保存需要保留的字段 */
+    CpuModel saved_model  = sim->cpu_model;
+    bool    saved_debug   = sim->debug_mode;
+    void   *saved_lock    = sim->sim_lock;   /* CRITICAL_SECTION，不能销毁 */
+
+    /* 清零断点 */
+    free(sim->breakpoints);
+    sim->breakpoints  = NULL;
+    sim->bp_count     = 0;
+    sim->bp_capacity  = 0;
+
+    /* 销毁并重建物理内存 */
+    mem_destroy(&sim->pmem);
+    mem_init(&sim->pmem, MEM_SIZE_DEFAULT);
+
+    /* 重建 MMU */
+    mmu_destroy(&sim->mmu);
+    mmu_init(&sim->mmu);
+
+    /* 重建断点数组 */
+    sim->bp_capacity = 16;
+    sim->breakpoints = calloc((size_t)sim->bp_capacity, sizeof(Breakpoint));
+    if (!sim->breakpoints) {
+        fprintf(stderr, "Fatal: Failed to allocate breakpoint array\n");
+        exit(1);
+    }
+
+    /* 清零 CPU 和多周期/流水线状态 */
+    memset(&sim->cpu,  0, sizeof(CPU));
+    memset(&sim->mc,   0, sizeof(MultiCycleState));
+    memset(&sim->pipe, 0, sizeof(PipelineState));
+    memset(&sim->dp,   0, sizeof(DatapathState));
+
+    /* 恢复 CPU 为 Machine 模式 */
+    cpu_init(&sim->cpu);
+
+    /* 恢复保留字段 */
+    sim->cpu_model   = saved_model;
+    sim->debug_mode  = saved_debug;
+    sim->sim_lock    = saved_lock;
+    sim->single_step = false;
+    sim->instr_count = 0;
+    sim->cycle_count = 0;
+
+    printf("[sim] Reloaded: CPU/memory reset, ready for new ELF.\n");
+}
+
+/* ── sim_lock / sim_unlock ─────────────────────────────────────── */
+
+void sim_lock(Simulator *sim)
+{
+    if (sim->sim_lock)
+        EnterCriticalSection((CRITICAL_SECTION *)sim->sim_lock);
+}
+
+void sim_unlock(Simulator *sim)
+{
+    if (sim->sim_lock)
+        LeaveCriticalSection((CRITICAL_SECTION *)sim->sim_lock);
 }

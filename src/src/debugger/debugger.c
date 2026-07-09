@@ -1,4 +1,5 @@
 #include "debugger/debugger.h"
+#include "debugger_internal.h"
 #include "simulator.h"       // Simulator, Breakpoint, sim_step, STACK_BASE, STACK_TOP
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,6 +7,13 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <inttypes.h>
+
+/* ── 测试模式：暴露 static 函数 ─────────────────────────────────── */
+#ifdef DEBUGGER_TEST
+#define STATIC_OR_EXTERN
+#else
+#define STATIC_OR_EXTERN static
+#endif
 
 /* ================================================================
  * debugger.c — 交互式调试器 REPL 实现
@@ -31,7 +39,7 @@ static const char *reg_abi_names[] = {
 };
 
 /* ── 寄存器名称解析: 返回索引 (0-31, 32=pc), 失败 -1 ────────── */
-static int parse_reg_name(const char *name)
+STATIC_OR_EXTERN int parse_reg_name(const char *name)
 {
     if (name[0] == '$') name++;
     if (strcmp(name, "pc") == 0) return 32;
@@ -52,7 +60,7 @@ static int parse_reg_name(const char *name)
 }
 
 /* ── 地址解析: hex / dec / $reg / $reg+offset ────────────────── */
-static bool parse_addr(const char *str, struct Simulator *sim, uint32_t *addr)
+STATIC_OR_EXTERN bool parse_addr(const char *str, struct Simulator *sim, uint32_t *addr)
 {
     if (!str || !*str) return false;
 
@@ -78,7 +86,7 @@ static bool parse_addr(const char *str, struct Simulator *sim, uint32_t *addr)
     return (*end == '\0');
 }
 
-static uint32_t get_reg_value(const struct Simulator *sim, int idx)
+STATIC_OR_EXTERN uint32_t get_reg_value(const struct Simulator *sim, int idx)
 {
     if (idx == 32) return sim->cpu.pc;
     if (idx >= 0 && idx <= 31) return sim->cpu.regs[idx];

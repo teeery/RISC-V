@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Datapath Editor - Collaborative</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#f5f5f5;color:#333;display:flex;flex-direction:column;height:100vh}
+#toolbar{padding:6px 12px;background:#fff;border-bottom:1px solid #ddd;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#toolbar button{padding:5px 12px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:11px}
+#toolbar button:hover{background:#e8e8e8}
+#toolbar button.act{background:#1a73e8;color:#fff;border-color:#1a73e8}
+#toolbar .sep{width:1px;height:20px;background:#ddd;margin:0 4px}
+#info{font-size:11px;color:#888;margin-left:auto;padding:0 8px}
+#main{display:flex;flex:1;overflow:hidden}
+#canvas-wrap{flex:1;overflow:auto;background:#ddd;position:relative}
+#canvas{display:block;background:#fff}
+#sidebar{width:260px;background:#fff;border-left:1px solid #ddd;padding:10px;overflow-y:auto;font-size:11px;display:flex;flex-direction:column}
+#sidebar h3{color:#333;margin:8px 0 4px;font-size:12px;font-weight:700}
+#sidebar h3 span{font-weight:400;color:#888;font-size:10px}
+.comp-item{padding:4px 8px;margin:1px 0;border:1px solid #eee;border-radius:3px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:11px}
+.comp-item:hover{background:#f0f0f0}
+.comp-item.sel{border-color:#1a73e8;background:#e8f0fe}
+.comp-item .sw{width:12px;height:12px;border-radius:2px;flex-shrink:0;border:1px solid rgba(0,0,0,0.2)}
+.comp-item .nm{flex:1}
+.comp-item .xy{color:#999;font-size:10px}
+.wire-item{padding:3px 8px;margin:1px 0;border:1px solid #eee;border-radius:3px;cursor:pointer;font-size:10px;display:flex;align-items:center;gap:6px}
+.wire-item:hover{background:#f0f0f0}
+.wire-item.sel{border-color:#1a73e8;background:#e8f0fe}
+.wire-item .wcol{width:20px;height:3px;border-radius:2px;flex-shrink:0}
+#export-box{background:#f8f8f8;border:1px solid #ddd;border-radius:4px;padding:8px;margin-top:auto;max-height:200px;overflow:auto;font-family:monospace;font-size:10px;white-space:pre;color:#333;flex-shrink:0}
+kbd{background:#eee;border:1px solid #ccc;border-radius:2px;padding:1px 4px;font-size:10px}
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <b style="font-size:13px">Datapath Editor</b>
+  <span class="sep"></span>
+  <button onclick="addComponent('PC','dp',140,30,70,40)" style="border-color:#1a73e8;color:#1a73e8">+ PC</button>
+  <button onclick="addComponent('+4','ct',270,34,50,28)">+ +4</button>
+  <button onclick="addMUX('PCSrc',390,28)">+ MUX</button>
+  <button onclick="addComponent('Instr<br>Memory','mm',140,130,95,52)" style="border-color:#e65100;color:#e65100">+ InstMem</button>
+  <button onclick="addComponent('Register<br>File','dp',310,120,130,85)" style="border-color:#1a73e8;color:#1a73e8">+ RegFile</button>
+  <button onclick="addComponent('Imm<br>Gen','mm',310,260,95,30)" style="border-color:#e65100;color:#e65100">+ ImmGen</button>
+  <button onclick="addComponent('ALU','dp',500,290,80,65)" style="border-color:#1a73e8;color:#1a73e8">+ ALU</button>
+  <button onclick="addMUX('ALUSrc',420,320)">+ MUX</button>
+  <button onclick="addComponent('Data<br>Memory','mm',640,290,85,60)" style="border-color:#e65100;color:#e65100">+ DataMem</button>
+  <button onclick="addMUX('MemtoReg',770,320)">+ MUX</button>
+  <button onclick="addComponent('Control<br>Unit','ct',140,400,90,55)" style="border-color:#2e7d32;color:#2e7d32">+ Ctrl</button>
+  <button onclick="addComponent('ALU<br>Ctrl','ct',500,420,80,32)" style="border-color:#2e7d32;color:#2e7d32">+ ALUCtrl</button>
+  <button onclick="addComponent('SHL 1','sh',640,430,55,24)">+ SHL1</button>
+  <button onclick="addComponent('ADD<br>(br)','ct',740,420,70,30)" style="border-color:#2e7d32;color:#2e7d32">+ ADDbr</button>
+  <button onclick="addComponent('AND','ct',490,440,25,22)">+ AND</button>
+  <span class="sep"></span>
+  <button onclick="addWire('data','#1a73e8')" style="color:#1a73e8">+ Data Wire</button>
+  <button onclick="addWire('ctrl','#c62828')" style="color:#c62828">+ Ctrl Wire</button>
+  <button onclick="addWire('addr','#666')" style="color:#666">+ Addr Wire</button>
+  <span class="sep"></span>
+  <span style="font-size:11px;color:#888">Mode:</span>
+  <button id="btn-comp" class="act" onclick="setMode('comp')">Component</button>
+  <button id="btn-wire" onclick="setMode('wire')">Wire</button>
+  <span id="info"></span>
+</div>
+<div id="main">
+  <div id="canvas-wrap">
+    <svg id="canvas" viewBox="0 0 1000 520" width="1000" height="520"></svg>
+  </div>
+  <div id="sidebar">
+    <h3>Components <span>(drag or arrows to move)</span></h3>
+    <div id="comp-list"></div>
+    <h3>Wires <span>(drag endpoints to route)</span></h3>
+    <div id="wire-list"></div>
+    <div style="flex:1;min-height:8px"></div>
+    <button onclick="exportSVG()" style="width:100%;padding:8px;background:#1a73e8;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer;margin-bottom:4px">Export Wire List</button>
+    <div id="export-box">Click Export to generate wire coordinates</div>
+  </div>
+</div>
+
+<script>
+// ============= DATA MODEL =============
+const COLORS = {
+  dp:  {fill:'#e8f0fe',stroke:'#1a73e8',txt:'#1a73e8',label:'Data Path'},
+  mm:  {fill:'#fff3e0',stroke:'#e65100',txt:'#e65100',label:'Memory'},
+  ct:  {fill:'#e8f5e9',stroke:'#2e7d32',txt:'#2e7d32',label:'Control'},
+  mx:  {fill:'#fce4ec',stroke:'#c62828',txt:'#c62828',label:'MUX'},
+  sh:  {fill:'#f3e5f5',stroke:'#7b1fa2',txt:'#7b1fa2',label:'Shift'}
+};
+
+const WTYPES = {
+  data: {color:'#1a73e8',dash:'',width:2.0, label:'Data'},
+  ctrl: {color:'#c62828',dash:'6,4',width:1.5, label:'Control'},
+  addr: {color:'#666',dash:'',width:1.8, label:'Address'}
+};
+
+let components = [];
+let wires = [];
+let selectedId = null;
+let mode = 'comp'; // 'comp' or 'wire'
+let dragInfo = null;
+
+// ============= COMPONENT OPERATIONS =============
+function addComponent(name, type, x, y, w, h) {
+  const id = 'c' + Date.now();
+  components.push({id, name, type, x, y, w, h, isMux:false});
+  select(id);
+  renderAll();
+}
+
+function addMUX(name, x, y) {
+  const id = 'c' + Date.now();
+  components.push({id, name, type:'mx', x, y, w:25, h:48, isMux:true});
+  select(id);
+  renderAll();
+}
+
+function addWire(type, color) {
+  const id = 'w' + Date.now();
+  // Default: short horizontal wire
+  wires.push({id, type, points:[{x:300,y:100},{x:450,y:100}]});
+  select(id);
+  renderAll();
+}
+
+function select(id) {
+  selectedId = id;
+  renderAll();
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('btn-comp').className = m==='comp'?'act':'';
+  document.getElementById('btn-wire').className = m==='wire'?'act':'';
+  document.getElementById('info').textContent = m==='comp' ? 'Drag components | Arrows: move 10px | Shift+Arrow: 1px | Delete: remove' : 'Drag wire endpoints | Click wire to select | Delete: remove wire | Click on canvas: add bend point';
+}
+
+function deleteSelected() {
+  if (!selectedId) return;
+  if (selectedId[0] === 'c') {
+    components = components.filter(c => c.id !== selectedId);
+  } else if (selectedId[0] === 'w') {
+    wires = wires.filter(w => w.id !== selectedId);
+  }
+  selectedId = null;
+  renderAll();
+}
+
+// ============= RENDERING =============
+function renderAll() {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('canvas');
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  // Defs
+  const defs = document.createElementNS(NS, 'defs');
+  Object.entries(WTYPES).forEach(([k, v]) => {
+    const m = document.createElementNS(NS, 'marker');
+    m.setAttribute('id', 'ar_'+k);
+    m.setAttribute('markerWidth', '7'); m.setAttribute('markerHeight', '5');
+    m.setAttribute('refX', '7'); m.setAttribute('refY', '2.5');
+    m.setAttribute('orient', 'auto');
+    const p = document.createElementNS(NS, 'polygon');
+    p.setAttribute('points', '0 0,7 2.5,0 5');
+    p.setAttribute('fill', v.color);
+    m.appendChild(p);
+    defs.appendChild(m);
+  });
+  svg.appendChild(defs);
+
+  // Grid (light)
+  for (let x = 0; x <= 1000; x += 50) {
+    const l = document.createElementNS(NS, 'line');
+    l.setAttribute('x1',x);l.setAttribute('y1',0);l.setAttribute('x2',x);l.setAttribute('y2',520);
+    l.setAttribute('stroke', x%100===0?'#e0e0e0':'#f0f0f0');l.setAttribute('stroke-width','0.5');
+    svg.appendChild(l);
+  }
+  for (let y = 0; y <= 520; y += 50) {
+    const l = document.createElementNS(NS, 'line');
+    l.setAttribute('x1',0);l.setAttribute('y1',y);l.setAttribute('x2',1000);l.setAttribute('y2',y);
+    l.setAttribute('stroke', y%100===0?'#e0e0e0':'#f0f0f0');l.setAttribute('stroke-width','0.5');
+    svg.appendChild(l);
+  }
+
+  // Wires
+  wires.forEach(w => {
+    const wt = WTYPES[w.type];
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('id', w.id);
+    g.style.cursor = 'pointer';
+
+    // Draw wire segments
+    for (let i = 0; i < w.points.length - 1; i++) {
+      const p1 = w.points[i], p2 = w.points[i+1];
+      const line = document.createElementNS(NS, 'line');
+      line.setAttribute('x1', p1.x); line.setAttribute('y1', p1.y);
+      line.setAttribute('x2', p2.x); line.setAttribute('y2', p2.y);
+      line.setAttribute('stroke', wt.color);
+      line.setAttribute('stroke-width', wt.width);
+      if (wt.dash) line.setAttribute('stroke-dasharray', wt.dash);
+      if (i === w.points.length - 2) line.setAttribute('marker-end', 'url(#ar_'+w.type+')');
+      if (selectedId === w.id) line.setAttribute('stroke-width', String(wt.width * 1.8));
+      g.appendChild(line);
+    }
+
+    // Drag handles on endpoints
+    if (mode === 'wire' && selectedId === w.id) {
+      w.points.forEach((p, i) => {
+        const c = document.createElementNS(NS, 'circle');
+        c.setAttribute('cx', p.x); c.setAttribute('cy', p.y);
+        c.setAttribute('r', '5'); c.setAttribute('fill', wt.color);
+        c.setAttribute('stroke', '#fff'); c.setAttribute('stroke-width', '2');
+        c.style.cursor = 'move';
+        c.addEventListener('mousedown', e => {
+          e.stopPropagation();
+          dragInfo = {id: w.id, pointIdx: i, sx: e.clientX, sy: e.clientY, ox: p.x, oy: p.y};
+        });
+        g.appendChild(c);
+      });
+    }
+
+    g.addEventListener('click', e => { e.stopPropagation(); select(w.id); });
+    svg.appendChild(g);
+  });
+
+  // Components
+  components.forEach(c => {
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('id', c.id);
+    g.setAttribute('transform', `translate(${c.x},${c.y})`);
+    g.style.cursor = mode==='comp' ? 'move' : 'default';
+    const col = COLORS[c.type];
+    const sel = selectedId === c.id;
+
+    if (c.isMux) {
+      const poly = document.createElementNS(NS, 'polygon');
+      poly.setAttribute('points', `${c.w/2},0 ${c.w},${c.h/2} ${c.w/2},${c.h} 0,${c.h/2}`);
+      poly.setAttribute('fill', col.fill);
+      poly.setAttribute('stroke', col.stroke);
+      poly.setAttribute('stroke-width', sel ? '2.5' : '1.8');
+      g.appendChild(poly);
+      const t = document.createElementNS(NS, 'text');
+      t.setAttribute('x', c.w/2); t.setAttribute('y', c.h/2+4);
+      t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-size', '9');
+      t.setAttribute('font-weight', '600'); t.setAttribute('fill', col.stroke);
+      t.setAttribute('font-family', 'system-ui,sans-serif');
+      t.textContent = c.name;
+      g.appendChild(t);
+    } else {
+      const rect = document.createElementNS(NS, 'rect');
+      rect.setAttribute('width', c.w); rect.setAttribute('height', c.h);
+      rect.setAttribute('rx', '5'); rect.setAttribute('fill', col.fill);
+      rect.setAttribute('stroke', col.stroke);
+      rect.setAttribute('stroke-width', sel ? '2.5' : '2');
+      g.appendChild(rect);
+      const lines = c.name.split('<br>');
+      const fs = lines.length > 1 ? 11 : 12;
+      lines.forEach((ln, i) => {
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', c.w/2); t.setAttribute('y', c.h/2 - (lines.length-1)*7 + i*14);
+        t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-size', fs);
+        t.setAttribute('font-weight', '700'); t.setAttribute('fill', col.txt);
+        t.setAttribute('font-family', 'system-ui,sans-serif');
+        t.textContent = ln;
+        g.appendChild(t);
+      });
+    }
+
+    if (sel) {
+      const outline = document.createElementNS(NS, 'rect');
+      outline.setAttribute('x', -2); outline.setAttribute('y', -2);
+      outline.setAttribute('width', c.w+4); outline.setAttribute('height', c.h+4);
+      outline.setAttribute('rx', '7'); outline.setAttribute('fill', 'none');
+      outline.setAttribute('stroke', '#1a73e8'); outline.setAttribute('stroke-width', '1.5');
+      outline.setAttribute('stroke-dasharray', '4,3');
+      g.appendChild(outline);
+
+      const info = document.createElementNS(NS, 'text');
+      info.setAttribute('x', c.w/2); info.setAttribute('y', -6);
+      info.setAttribute('text-anchor', 'middle'); info.setAttribute('font-size', '9');
+      info.setAttribute('fill', '#1a73e8'); info.setAttribute('font-family', 'monospace');
+      info.textContent = `${c.x},${c.y} ${c.w}x${c.h}`;
+      g.appendChild(info);
+    }
+
+    g.addEventListener('mousedown', e => {
+      if (mode !== 'comp') return;
+      e.stopPropagation();
+      select(c.id);
+      dragInfo = {id: c.id, sx: e.clientX, sy: e.clientY, ox: c.x, oy: c.y};
+    });
+    g.addEventListener('click', e => { e.stopPropagation(); select(c.id); });
+    svg.appendChild(g);
+  });
+
+  updateSidebar();
+}
+
+// ============= SIDEBAR =============
+function updateSidebar() {
+  document.getElementById('comp-list').innerHTML = components.map(c => {
+    const col = COLORS[c.type];
+    const sel = c.id === selectedId ? ' sel' : '';
+    return `<div class="comp-item${sel}" onclick="select('${c.id}')">
+      <span class="sw" style="background:${col.stroke}"></span>
+      <span class="nm">${c.name.replace(/<br>/g,' ')}</span>
+      <span class="xy">${c.x},${c.y}</span>
+    </div>`;
+  }).join('');
+
+  document.getElementById('wire-list').innerHTML = wires.map(w => {
+    const wt = WTYPES[w.type];
+    const sel = w.id === selectedId ? ' sel' : '';
+    const pts = w.points.map(p => `(${p.x},${p.y})`).join(' → ');
+    return `<div class="wire-item${sel}" onclick="select('${w.id}')">
+      <span class="wcol" style="background:${wt.color}"></span>
+      <span style="flex:1;font-size:9px">${wt.label}: ${pts}</span>
+    </div>`;
+  }).join('');
+}
+
+// ============= MOUSE / KEYBOARD =============
+document.addEventListener('mousemove', e => {
+  if (!dragInfo) return;
+  const dx = e.clientX - dragInfo.sx;
+  const dy = e.clientY - dragInfo.sy;
+
+  if (dragInfo.pointIdx !== undefined) {
+    // Dragging wire endpoint
+    const w = wires.find(x => x.id === dragInfo.id);
+    if (!w) return;
+    const p = w.points[dragInfo.pointIdx];
+    p.x = Math.round((dragInfo.ox + dx) / 5) * 5;
+    p.y = Math.round((dragInfo.oy + dy) / 5) * 5;
+  } else if (dragInfo.id && dragInfo.id[0] === 'c') {
+    // Dragging component - round to grid
+    const grid = 5;
+    const c = components.find(x => x.id === dragInfo.id);
+    if (!c) return;
+    c.x = Math.round((dragInfo.ox + dx) / grid) * grid;
+    c.y = Math.round((dragInfo.oy + dy) / grid) * grid;
+  }
+
+  renderAll();
+});
+
+document.addEventListener('mouseup', () => { dragInfo = null; });
+
+document.addEventListener('keydown', e => {
+  if (!selectedId) return;
+  const step = e.shiftKey ? 1 : 10;
+
+  if (selectedId[0] === 'c') {
+    const c = components.find(x => x.id === selectedId);
+    if (!c) return;
+    switch(e.key) {
+      case 'ArrowLeft':  c.x -= step; break;
+      case 'ArrowRight': c.x += step; break;
+      case 'ArrowUp':    c.y -= step; break;
+      case 'ArrowDown':  c.y += step; break;
+      case 'Delete': case 'Backspace':
+        components = components.filter(x => x.id !== selectedId);
+        selectedId = null;
+        break;
+      default: return;
+    }
+    e.preventDefault();
+    renderAll();
+  } else if (selectedId[0] === 'w') {
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      wires = wires.filter(w => w.id !== selectedId);
+      selectedId = null;
+      e.preventDefault();
+      renderAll();
+    }
+  }
+});
+
+document.getElementById('canvas').addEventListener('click', e => {
+  if (mode === 'wire' && selectedId && selectedId[0] === 'w') {
+    const w = wires.find(x => x.id === selectedId);
+    if (!w) return;
+    // Add a bend point at click position
+    const svgRect = document.getElementById('canvas').getBoundingClientRect();
+    const x = Math.round((e.clientX - svgRect.left) / 5) * 5;
+    const y = Math.round((e.clientY - svgRect.top) / 5) * 5;
+    // Insert at the right position (closest segment)
+    let insertAt = w.points.length - 1;
+    let minDist = Infinity;
+    for (let i = 0; i < w.points.length - 1; i++) {
+      const mx = (w.points[i].x + w.points[i+1].x) / 2;
+      const my = (w.points[i].y + w.points[i+1].y) / 2;
+      const d = Math.abs(mx - x) + Math.abs(my - y);
+      if (d < minDist) { minDist = d; insertAt = i + 1; }
+    }
+    w.points.splice(insertAt, 0, {x, y});
+    renderAll();
+  }
+});
+
+// ============= EXPORT =============
+function exportSVG() {
+  let lines = [];
+  lines.push('// === COMPONENTS ===');
+  components.forEach(c => {
+    const col = COLORS[c.type];
+    if (c.isMux) {
+      lines.push(`MUX  ${c.name.padEnd(12)}  x=${c.x}  y=${c.y}  w=${c.w}  h=${c.h}  color=${col.stroke}`);
+    } else {
+      lines.push(`RECT ${c.name.replace(/<br>/g,' ').padEnd(12)}  x=${c.x}  y=${c.y}  w=${c.w}  h=${c.h}  color=${col.stroke}`);
+    }
+  });
+  lines.push('');
+  lines.push('// === WIRES ===');
+  wires.forEach(w => {
+    const wt = WTYPES[w.type];
+    const pts = w.points.map(p => `${p.x},${p.y}`).join(' → ');
+    lines.push(`${wt.label.padEnd(8)} ${pts}  color=${wt.color}`);
+  });
+  lines.push('');
+  lines.push('// Copy the above and send to Claude. Claude will generate the final SVG.');
+  document.getElementById('export-box').textContent = lines.join('\n');
+}
+
+// ============= INIT =============
+// Pre-place components with reasonable defaults
+addComponent('PC','dp',140,30,70,40);
+addComponent('+4','ct',270,34,50,28);
+addMUX('PCSrc',390,28);
+addComponent('Instr<br>Memory','mm',140,130,95,52);
+addComponent('Register<br>File','dp',310,120,130,85);
+addComponent('Imm<br>Gen','mm',310,260,95,30);
+addMUX('ALUSrc',420,320);
+addComponent('ALU','dp',500,290,80,65);
+addComponent('Data<br>Memory','mm',640,290,85,60);
+addMUX('MemtoReg',770,320);
+addComponent('Control<br>Unit','ct',140,400,90,55);
+addComponent('ALU<br>Ctrl','ct',500,420,80,32);
+addComponent('SHL 1','sh',640,430,55,24);
+addComponent('ADD<br>(br)','ct',740,420,70,30);
+addComponent('AND','ct',490,440,25,22);
+
+// Pre-place some key wires
+wires.push({id:'w_pc_imem',type:'addr',points:[{x:175,y:70},{x:175,y:128}]});
+wires.push({id:'w_imem_reg',type:'data',points:[{x:235,y:156},{x:308,y:156}]});
+wires.push({id:'w_pc_add',type:'addr',points:[{x:210,y:50},{x:268,y:48}]});
+wires.push({id:'w_add_mux',type:'addr',points:[{x:320,y:48},{x:388,y:48}]});
+wires.push({id:'w_mux_out',type:'addr',points:[{x:415,y:50},{x:200,y:50},{x:200,y:20},{x:175,y:20},{x:175,y:28}]});
+wires.push({id:'w_reg_alu_a',type:'data',points:[{x:440,y:205},{x:440,y:250},{x:540,y:250},{x:540,y:288}]});
+wires.push({id:'w_reg_alu_b',type:'data',points:[{x:380,y:205},{x:380,y:320},{x:418,y:340}]});
+wires.push({id:'w_mux_alu',type:'data',points:[{x:445,y:348},{x:498,y:320}]});
+wires.push({id:'w_alu_dmem',type:'data',points:[{x:580,y:322},{x:638,y:322}]});
+wires.push({id:'w_dmem_mux',type:'data',points:[{x:725,y:322},{x:768,y:340}]});
+wires.push({id:'w_imm_mux',type:'data',points:[{x:357,y:275},{x:420,y:275},{x:420,y:318}]});
+wires.push({id:'w_ctrl_regwrite',type:'ctrl',points:[{x:230,y:400},{x:375,y:400},{x:375,y:207}]});
+wires.push({id:'w_ctrl_alusrc',type:'ctrl',points:[{x:200,y:420},{x:200,y:470},{x:440,y:470},{x:440,y:370}]});
+wires.push({id:'w_zero',type:'addr',points:[{x:540,y:355},{x:540,y:380},{x:502,y:380},{x:502,y:438}]});
+
+selectedId = null;
+renderAll();
+</script>
+</body>
+</html>
