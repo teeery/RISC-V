@@ -1,2 +1,22 @@
 # AI 会话记忆（本地/个人，不提交）
 memory/
+HSD选题/
+
+# 在线编译临时文件
+.compile_input.c
+.compile_output.elf
+
+# xPack RISC-V GCC 工具链（本地下载，不提交）
+tools/riscv-gcc/
+tools/*.zip
+
+# PPT 答辩文件（不提交）
+docs/PPT/
+
+# 编译产物
+*.o
+*.exe
+
+# Visual Studio 项目配置
+.vs/
+src/.vs/

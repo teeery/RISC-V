@@ -13,6 +13,7 @@
 
 #include "cpu/execute.h"
 #include "cpu/decode.h"
+#include "cpu/datapath/alu.h"
 #include "simulator.h"
 #include "memory/mmu.h"
 #include "types.h"
@@ -55,45 +56,11 @@ bool exec_op_imm(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     (void)next_pc;
     CPU *cpu = &sim->cpu;
-    int32_t  src  = (int32_t)cpu->regs[dec->rs1];
-    int32_t  imm  = dec->imm;
-    uint32_t shamt = imm & 0x1F;  /* SLLI/SRLI/SRAI 只用低 5 位 */
 
-    switch (dec->funct3) {
-    case 0: /* ADDI */
-        cpu->regs[dec->rd] = (uint32_t)(src + imm);
-        break;
-    case 2: /* SLTI — 有符号比较 */
-        cpu->regs[dec->rd] = (src < imm) ? 1 : 0;
-        break;
-    case 3: /* SLTIU — 无符号比较 */
-        cpu->regs[dec->rd] = ((uint32_t)src < (uint32_t)imm) ? 1 : 0;
-        break;
-    case 4: /* XORI */
-        cpu->regs[dec->rd] = (uint32_t)src ^ (uint32_t)imm;
-        break;
-    case 5: /* SRLI / SRAI — funct7[5] 区分 */
-        if (dec->funct7 == 0x20) {
-            /* SRAI：算术右移（符号扩展） */
-            cpu->regs[dec->rd] = (uint32_t)(src >> (int32_t)shamt);
-        } else {
-            /* SRLI：逻辑右移（零扩展） */
-            cpu->regs[dec->rd] = (uint32_t)src >> shamt;
-        }
-        break;
-    case 6: /* ORI */
-        cpu->regs[dec->rd] = (uint32_t)src | (uint32_t)imm;
-        break;
-    case 7: /* ANDI */
-        cpu->regs[dec->rd] = (uint32_t)src & (uint32_t)imm;
-        break;
-    case 1: /* SLLI */
-        cpu->regs[dec->rd] = (uint32_t)src << shamt;
-        break;
-    default:
-        cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
-        return false;
-    }
+    /* ALU 组合逻辑：funct3 + funct7 → AluOp → 32-bit 结果
+     * 移位量掩码 (b & 0x1F) 由 alu_compute 内部完成 */
+    AluOp op = alu_select_op(dec->funct3, dec->funct7, false);
+    cpu->regs[dec->rd] = alu_compute(op, cpu->regs[dec->rs1], (uint32_t)dec->imm);
     return true;
 }
 
@@ -113,53 +80,14 @@ bool exec_op(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
     (void)next_pc;
     CPU *cpu = &sim->cpu;
 
-    /* ── M 扩展分流 ── */
+    /* ── M 扩展分流（funct7=0x01，乘除法不经过 ALU）── */
     if (dec->funct7 == 1) {
         return exec_m_muldiv(sim, dec, next_pc);
     }
 
-    uint32_t rs1_val = cpu->regs[dec->rs1];
-    uint32_t rs2_val = cpu->regs[dec->rs2];
-    int32_t  s1 = (int32_t)rs1_val;
-    int32_t  s2 = (int32_t)rs2_val;
-
-    switch (dec->funct3) {
-    case 0: /* ADD / SUB */
-        if (dec->funct7 == 0x20) {
-            cpu->regs[dec->rd] = (uint32_t)(s1 - s2);       /* SUB */
-        } else {
-            cpu->regs[dec->rd] = rs1_val + rs2_val;         /* ADD */
-        }
-        break;
-    case 1: /* SLL — 逻辑左移 */
-        cpu->regs[dec->rd] = rs1_val << (rs2_val & 0x1F);
-        break;
-    case 2: /* SLT — 有符号比较 */
-        cpu->regs[dec->rd] = (s1 < s2) ? 1 : 0;
-        break;
-    case 3: /* SLTU — 无符号比较 */
-        cpu->regs[dec->rd] = (rs1_val < rs2_val) ? 1 : 0;
-        break;
-    case 4: /* XOR */
-        cpu->regs[dec->rd] = rs1_val ^ rs2_val;
-        break;
-    case 5: /* SRL / SRA */
-        if (dec->funct7 == 0x20) {
-            cpu->regs[dec->rd] = (uint32_t)(s1 >> (int32_t)(rs2_val & 0x1F)); /* SRA */
-        } else {
-            cpu->regs[dec->rd] = rs1_val >> (rs2_val & 0x1F);                /* SRL */
-        }
-        break;
-    case 6: /* OR */
-        cpu->regs[dec->rd] = rs1_val | rs2_val;
-        break;
-    case 7: /* AND */
-        cpu->regs[dec->rd] = rs1_val & rs2_val;
-        break;
-    default:
-        cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
-        return false;
-    }
+    /* RV32I ALU 操作：funct3 + funct7 → AluOp → 32-bit 结果 */
+    AluOp op = alu_select_op(dec->funct3, dec->funct7, true);
+    cpu->regs[dec->rd] = alu_compute(op, cpu->regs[dec->rs1], cpu->regs[dec->rs2]);
     return true;
 }
 
@@ -282,37 +210,14 @@ bool exec_branch(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
 {
     CPU *cpu = &sim->cpu;
 
-    uint32_t rs1_val = cpu->regs[dec->rs1];
-    uint32_t rs2_val = cpu->regs[dec->rs2];
-    int32_t  s1 = (int32_t)rs1_val;
-    int32_t  s2 = (int32_t)rs2_val;
-    bool     taken = false;
-
-    switch (dec->funct3) {
-    case 0: /* BEQ  — 相等 */
-        taken = (rs1_val == rs2_val);
-        break;
-    case 1: /* BNE  — 不等 */
-        taken = (rs1_val != rs2_val);
-        break;
-    case 4: /* BLT  — 有符号小于 */
-        taken = (s1 < s2);
-        break;
-    case 5: /* BGE  — 有符号大于等于 */
-        taken = (s1 >= s2);
-        break;
-    case 6: /* BLTU — 无符号小于 */
-        taken = (rs1_val < rs2_val);
-        break;
-    case 7: /* BGEU — 无符号大于等于 */
-        taken = (rs1_val >= rs2_val);
-        break;
-    default:
+    /* funct3=2,3 是 RV32I B-type 的保留值 → 非法指令 */
+    if (dec->funct3 == 2 || dec->funct3 == 3) {
         cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);
         return false;
     }
 
-    if (taken) {
+    /* ALU 比较器：6 种分支条件 (BEQ/BNE/BLT/BGE/BLTU/BGEU) */
+    if (alu_branch_cond(dec->funct3, cpu->regs[dec->rs1], cpu->regs[dec->rs2])) {
         *next_pc = cpu->pc + (uint32_t)dec->imm;
     }
     return true;

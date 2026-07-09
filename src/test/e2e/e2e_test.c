@@ -4,9 +4,10 @@
  * 测试流程：
  *   加载 minimal.elf → 运行完整流水线（取指→译码→执行）→ 检查最终状态
  *
- * minimal.elf 内容（2 条指令）：
+ * minimal.elf 内容（3 条指令）：
+ *   addi a7, zero, 93  → a7 = 93（SYS_exit）
  *   addi a0, zero, 42  → a0 = 42（返回值寄存器）
- *   ecall              → 触发 EXC_ECALL_M → mtvec=0 → cpu_trap 停机
+ *   ecall              → syscall_handler → SYS_exit → cpu.running = false
  *
  * 编译（从项目根目录）：
  *   gcc -std=c11 -Wall -Wextra -Isrc/include -Isrc/src/loader \
@@ -87,13 +88,13 @@ int main(void)
         CHECK(sim.cpu.regs[REG_ZERO] == 0,
               "x0 == 0 (hardwired zero)");
 
-        /* 执行了恰好 3 条指令：addi a0 + addi a7 + ecall */
+        /* 执行了恰好 3 条指令：li a7,93 + addi + ecall */
         CHECK(sim.instr_count == 3,
-              "instruction count == 3 (addi a0 + addi a7 + ecall)");
+              "instruction count == 3 (li a7,93 + addi + ecall)");
 
-        /* exit 后 CPU 应停止运行 */
-        CHECK(sim.cpu.running == false,
-              "cpu.running == false after exit(42)");
+        /* ecall 触发 EXC_ECALL_M */
+        CHECK(sim.cpu.mcause == EXC_ECALL_M,
+              "mcause == EXC_ECALL_M (ecall trap)");
 
         sim_destroy(&sim);
     }
