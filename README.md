@@ -2,6 +2,83 @@
 
 面向 RISC-V 的模拟器与调试器，支持 RV32I 基础整数指令集、M 扩展（乘除法）及 F 扩展（单精度浮点），能够加载 ELF32 可执行文件并运行。实现了三种 CPU 执行模型（单周期 / 多周期 / 五级流水线）、数据通路可视化、虚拟内存映射（Sv32 两级页表）、常用 Linux 系统调用模拟（write / read / exit / brk），以及一个支持断点、单步执行、寄存器/内存查看的交互式调试器，同时提供 Web 端流水线数据通路实时可视化。
 
+## 实现成果
+
+### 指令集（76 条指令）
+
+| 扩展 | 指令数 | 覆盖范围 |
+|------|--------|----------|
+| **RV32I** | 40 条 | 整数运算 (ADD/SUB/SLL/SLT/SLTU/XOR/SRL/SRA/OR/AND+LUI/AUIPC) · 立即数 (ADDI/SLTI/SLTIU/XORI/ORI/ANDI/SLLI/SRLI/SRAI) · 分支 (BEQ/BNE/BLT/BGE/BLTU/BGEU) · 跳转 (JAL/JALR) · 访存 (LB/LH/LW/LBU/LHU/SB/SH/SW) · 特权 (ECALL/EBREAK/MRET/CSR) · 同步 (FENCE) |
+| **M** | 8 条 | MUL/MULH/MULHSU/MULHU · DIV/DIVU · REM/REMU |
+| **F** | 28 条 | 算术 (FADD.S/FSUB.S/FMUL.S/FDIV.S/FSQRT.S) · 符号注入 (FSGNJ/FSGNJN/FSGNJX) · 极值 (FMIN/FMAX) · 类型转换 (FCVT.W.S/FCVT.WU.S/FCVT.S.W/FCVT.S.WU/FMV.X.W/FMV.W.X) · 比较 (FEQ/FLT/FLE/FCLASS) · 访存 (FLW/FSW) · 乘加 (FMADD/FMSUB/FNMSUB/FNMADD) |
+
+### CPU 执行模型
+
+| 模型 | 特点 |
+|------|------|
+| **单周期** (`single`) | 每条指令 1 周期完成，简单直观，CPI=1 |
+| **多周期** (`multi`) | IF → ID → EX → MEM → WB 分阶段执行，不同指令不同周期数 |
+| **五级流水线** (`pipeline`) | IF/ID/EX/MEM/WB 五级重叠执行 · **Forwarding**（EX/MEM→EX, MEM/WB→EX 前递）· **Stall**（Load-use 冒险自动插入气泡）· **Flush**（分支/跳转错误路径冲刷） |
+
+### 调试器
+
+| 功能 | 交互式 (CLI) | Web 端 |
+|------|:---:|:---:|
+| 断点 (增/删/列) | ✅ | ✅ |
+| 单步执行 (step/stepi) | ✅ | ✅ |
+| 继续运行 (continue) | ✅ | ✅ |
+| 寄存器查看 (x0–x31 + PC) | ✅ | ✅ |
+| 整数 + 浮点寄存器 | ✅ | ✅ |
+| 内存查看 (x/Nx) | ✅ | ✅ |
+| 反汇编 | ✅ | ✅ |
+| 调用栈回溯 (backtrace) | ✅ | ✅ |
+| 流水线数据通路可视化 | — | ✅ |
+| 在线编译 (assembly→ELF) | — | ✅ |
+| 运行状态实时推送 | — | ✅ |
+
+### Web 调试器 API
+
+```
+GET  /                  Web 调试器界面
+GET  /api/status        模拟器运行状态
+GET  /api/registers     读取 32 个整数 + 32 个浮点寄存器
+GET  /api/memory        读取内存区域
+GET  /api/backtrace     调用栈回溯
+GET  /api/breakpoints   断点列表
+POST /api/breakpoint    添加断点
+DELETE /api/breakpoint  删除断点
+POST /api/step          单步执行
+POST /api/continue      继续运行
+POST /api/stop          停止运行
+GET  /api/datapath      流水线各级寄存器 + Forwarding/Stall/Flush 状态
+GET  /api/disassembly   反汇编
+GET  /pipeline.svg      流水线数据通路 SVG 图
+POST /api/compile       在线编译汇编为 ELF
+GET  /api/compile       编译状态查询
+```
+
+### 系统组件
+
+| 组件 | 实现 |
+|------|------|
+| **ELF 加载器** | ELF32 解析 · Program Header 段加载 · Section Header 节解析 · 栈初始化 (argv/envp/AUX) · ELF magic 验证 |
+| **MMU** | Sv32 两级页表 · 4KB/4MB 页面 · 虚拟→物理地址转换 · U/S/RWX 权限检查 |
+| **系统调用** | `exit` (93) · `write` (64) · `read` (63) · `brk` (214) |
+
+### 测试覆盖
+
+| 测试 | 文件 | 覆盖 |
+|------|------|------|
+| CPU 译码 | `decode_test.c` | 76 条指令解码正确性 |
+| CPU 执行 | `execute_test.c` | RV32I 指令执行 |
+| F 扩展 | `f_test.c` | 浮点运算 |
+| M 扩展 | `m_test.c` | 乘除法 |
+| 多周期 | `multi_cycle_test.c` | 多周期控制器 |
+| 流水线 | `pipeline_test.c` | 五级流水线 + Forwarding/冒险 |
+| 调试器 | `debugger_test.c` | 断点/单步/寄存器/内存 |
+| ELF 加载 | `test_load.c` / `test_validate.c` | ELF 加载与验证 |
+| 端到端 | `e2e_test.c` | 完整链路：加载→执行→ecall→退出 (13/13 ✅) |
+
 ## 项目结构
 
 ```
