@@ -1,6 +1,6 @@
 # RISC-V
 
-面向 RISC-V 的模拟器与调试器，支持 RV32I 基础整数指令集及 M 扩展（乘除法），能够加载 ELF32 可执行文件并运行。实现了虚拟内存映射（Sv32 两级页表）、常用 Linux 系统调用模拟（write / read / exit / brk），以及一个支持断点、单步执行、寄存器/内存查看的交互式调试器。
+面向 RISC-V 的模拟器与调试器，支持 RV32I 基础整数指令集、M 扩展（乘除法）及 F 扩展（单精度浮点），能够加载 ELF32 可执行文件并运行。实现了三种 CPU 执行模型（单周期 / 多周期 / 五级流水线）、数据通路可视化、虚拟内存映射（Sv32 两级页表）、常用 Linux 系统调用模拟（write / read / exit / brk），以及一个支持断点、单步执行、寄存器/内存查看的交互式调试器，同时提供 Web 端流水线数据通路实时可视化。
 
 ## 项目结构
 
@@ -13,9 +13,17 @@ risc-v/
 │   │   ├── cpu/
 │   │   │   ├── cpu.h                #   CPU 模拟
 │   │   │   ├── decode.h             #   指令译码
-│   │   │   └── execute.h            #   指令执行
+│   │   │   ├── execute.h            #   指令执行
+│   │   │   ├── exec_internal.h      #   执行器内部接口
+│   │   │   ├── controller/
+│   │   │   │   └── controller_internal.h  # 控制器接口（单/多/流水线）
+│   │   │   └── datapath/
+│   │   │       └── alu.h            #   ALU 数据通路
 │   │   ├── debugger/
-│   │   │   └── debugger.h           #   调试器
+│   │   │   ├── debugger.h           #   交互式调试器
+│   │   │   └── web_server.h         #   Web 调试器服务器
+│   │   ├── linux/
+│   │   │   └── syscall.h            #   系统调用模拟
 │   │   ├── loader/
 │   │   │   └── elf_loader.h         #   ELF 加载器
 │   │   └── memory/
@@ -27,13 +35,29 @@ risc-v/
 │   │   ├── cpu/                     # CPU ——分工：李特
 │   │   │   ├── cpu.c
 │   │   │   ├── decode.c
-│   │   │   └── execute.c
+│   │   │   ├── controller/          #   CPU 控制器
+│   │   │   │   ├── single_cycle.c   #     单周期
+│   │   │   │   ├── multi_cycle.c    #     多周期
+│   │   │   │   └── pipeline.c       #     五级流水线
+│   │   │   ├── datapath/
+│   │   │   │   └── alu.c            #   ALU 运算单元
+│   │   │   └── execute/             #   指令执行器
+│   │   │       ├── execute.c        #     执行分派
+│   │   │       ├── exec_rv32i.c     #     RV32I 基础指令
+│   │   │       ├── exec_m.c         #     M 扩展（乘除法）
+│   │   │       └── exec_f.c         #     F 扩展（浮点）
 │   │   ├── debugger/                # 调试器 ——分工：嘉俊
 │   │   │   ├── debugger.c
-│   │   │   └── breakpoint.c
+│   │   │   ├── debugger_internal.h
+│   │   │   ├── breakpoint.c
+│   │   │   ├── web_server.c         #   Web 调试器 HTTP 服务
+│   │   │   └── datapath_pipeline_dynamic.svg  # 流水线 SVG 资源
+│   │   ├── linux/
+│   │   │   └── syscall.c            #   系统调用模拟
 │   │   ├── loader/                  # ELF 加载器 ——分工：嘉华
 │   │   │   ├── elf_load.c
 │   │   │   ├── elf_segment.c
+│   │   │   ├── elf_section.c
 │   │   │   ├── elf_stack.c
 │   │   │   ├── elf_validate.c
 │   │   │   └── loader_internal.h
@@ -43,7 +67,13 @@ risc-v/
 │   └── test/                        # 单元测试 & 测试夹具
 │       ├── cpu/
 │       │   ├── decode_test.c
-│       │   └── execute_test.c
+│       │   ├── execute_test.c
+│       │   ├── f_test.c             #   F 扩展测试
+│       │   ├── m_test.c             #   M 扩展测试
+│       │   ├── multi_cycle_test.c   #   多周期测试
+│       │   └── pipeline_test.c      #   流水线测试
+│       ├── debugger/
+│       │   └── debugger_test.c      #   调试器测试
 │       ├── loader/
 │       │   ├── test_load.c
 │       │   ├── test_validate.c
@@ -64,8 +94,17 @@ risc-v/
 │   │   ├── 嘉俊/                    #   调试器设计文档
 │   │   ├── 嘉华/                    #   Loader 设计文档
 │   │   └── 焕聪/                    #   Memory 设计文档
+│   ├── tools/                       #   文档工具
+│   │   ├── add_overlay.py           #     SVG 叠加标注工具
+│   │   ├── embed_svg.py             #     SVG→C 字符串转换
+│   │   └── datapath_editor.html     #     数据通路交互编辑器
+│   ├── 指令解码表.md                 #   指令编码速查
+│   ├── 流水线.drawio.svg            #   流水线源图
+│   ├── Web调试器使用文档.md
 │   └── 参考项目结构1/ 参考项目结构2/
 ├── build/                           # 编译产物
+├── tools/                           # 外部工具链
+│   └── riscv-gcc/                   #   RISC-V GCC 14.2 交叉编译器
 └── README.md
 ```
 
@@ -103,17 +142,33 @@ risc-v/
 | `build/riscv-sim.exe` | 模拟器主程序 |
 | `build/execute_test.exe` | CPU 执行单元测试 |
 | `build/decode_test.exe` | CPU 译码单元测试 |
-| `build/test_load.exe` | Loader 测试 |
+| `build/f_test.exe` | F 扩展浮点测试 |
+| `build/m_test.exe` | M 扩展乘除测试 |
+| `build/multi_cycle_test.exe` | 多周期控制器测试 |
+| `build/pipeline_test.exe` | 流水线控制器测试 |
+| `build/debugger_test.exe` | 调试器单元测试 |
 | `build/e2e_test.exe` | 端到端测试 |
+| `build/test_load.exe` | Loader 测试 |
 
 ## 运行
 
 ```bash
-./build/riscv-sim src/test/e2e/hello.elf          # 直接运行
-./build/riscv-sim -s src/test/e2e/hello.elf        # 调试模式（进入交互式 Debugger REPL）
-```
+# 基本运行
+./riscv-sim src/test/e2e/hello.elf
 
-`-t`（指令跟踪）已预留但尚未实现。
+# 指定 CPU 模型（single / multi / pipeline）
+./riscv-sim -m pipeline src/test/e2e/hello.elf
+
+# 交互式调试模式
+./riscv-sim -s src/test/e2e/hello.elf
+
+# Web 调试器模式（流水线数据通路实时可视化）
+./riscv-sim -w 8080 src/test/e2e/hello.elf
+# 浏览器访问 http://localhost:8080
+
+# 指令跟踪模式（开发中）
+./riscv-sim -t src/test/e2e/hello.elf
+```
 
 ## 设计文档
 
