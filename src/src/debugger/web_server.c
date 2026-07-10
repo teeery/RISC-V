@@ -1063,7 +1063,7 @@ static void route_get_index(SOCKET client)
         "var t=await r.text();document.getElementById('pipeline').innerHTML=t;}\r\n"
         "async function loadDemo(name){\r\n"
         "if(!name)return;\r\n"
-        "var r=await api('POST','/program','{\"program\":\"'+name+'\"}');\r\n"
+        "var r=await api('POST','/program',{program:name});\r\n"
         "if(r&&r.status==='ok'){location.reload();}\r\n"
         "else{alert('Failed to load program: '+(r?r.message:'unknown'));}}\r\n"
         "async function populateProgs(){\r\n"
