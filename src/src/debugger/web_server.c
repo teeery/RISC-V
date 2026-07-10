@@ -1,6 +1,7 @@
 #include "debugger/debugger.h"
 #include "debugger/web_server.h"
 #include "simulator.h"
+#include "demo_programs.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -905,7 +906,9 @@ static void route_get_index(SOCKET client)
         "<option value=\"pipeline\" selected>Pipeline</option>\r\n"
         "</select>\r\n"
         "<span style=\"flex:1\"></span>\r\n"
-        "<button class=\"outline\" onclick=\"location.href='/compile'\">C Compiler</button>\r\n"
+        "<select id=\"prog_sel\" onchange=\"loadDemo(this.value)\" style=\"padding:3px 6px;border:1px solid #c0c4cc;border-radius:4px;font-size:10px;background:#fff;color:#333\">\r\n"
+        "<option value=\"\">Loading...</option>\r\n"
+        "</select>\r\n"
         "<span class=\"stat stopped\" id=\"status\">Stopped</span>\r\n"
         "<button class=\"primary\" onclick=\"step()\">Step</button>\r\n"
         "<button class=\"primary\" onclick=\"cont()\">Run</button>\r\n"
@@ -1058,9 +1061,23 @@ static void route_get_index(SOCKET client)
         "async function loadDatapath(){var r=await fetch('/pipeline.svg');\r\n"
         "if(!r.ok){document.getElementById('pipeline').innerHTML='<div style=\"color:#c62828;padding:20px\">SVG not loaded</div>';return;}\r\n"
         "var t=await r.text();document.getElementById('pipeline').innerHTML=t;}\r\n"
+        "async function loadDemo(name){\r\n"
+        "if(!name)return;\r\n"
+        "var r=await api('POST','/program','{\"program\":\"'+name+'\"}');\r\n"
+        "if(r&&r.status==='ok'){location.reload();}\r\n"
+        "else{alert('Failed to load program: '+(r?r.message:'unknown'));}}\r\n"
+        "async function populateProgs(){\r\n"
+        "var r=await api('GET','/programs');if(!r||!r.programs)return;\r\n"
+        "var s=document.getElementById('prog_sel');\r\n"
+        "s.innerHTML='';\r\n"
+        "for(var i=0;i<r.programs.length;i++){\r\n"
+        "var p=r.programs[i];\r\n"
+        "s.innerHTML+='<option value=\"'+p.name+'\">'+p.name+' — '+p.desc+'</option>';}\r\n"
+        "s.value=r.current||'';}\r\n"
         "async function init(){await loadDatapath();\r\n"
         "var s=await api('GET','/status');if(s&&s.cpu_model_name){updateModeHint(s.cpu_model_name);}\r\n"
-        "var dp=await api('GET','/datapath');await refresh(dp);await refreshRegs();await refreshBPs();await refreshAsm();}\r\n"
+        "var dp=await api('GET','/datapath');await refresh(dp);await refreshRegs();await refreshBPs();await refreshAsm();\r\n"
+        "await populateProgs();}\r\n"
         "init();\r\n"
         "</script>\r\n"
         "</body></html>\r\n";
@@ -1068,16 +1085,103 @@ static void route_get_index(SOCKET client)
     send_response(client, 200, "text/html; charset=utf-8", html);
 }
 
-/* POST /compile — C 源码编译 + 加载
- * Body: { "source": "int main() { return 42; }" }
- *
- * 流程：
- *   1. 解析 body 中的 source 字段
- *   2. 写入临时 C 文件
- *   3. 调用 riscv64-unknown-elf-gcc 交叉编译
- *   4. 成功：sim_reload() + sim_load_elf() 加载新程序
- *   5. 返回编译结果 + 入口地址
- */
+/* GET /programs — 返回内置 demo 程序列表 */
+static void route_get_programs(SOCKET client)
+{
+    char json[2048];
+    int pos = 0;
+    pos += snprintf(json + pos, sizeof(json) - pos, "{\"programs\":[");
+    for (int i = 0; i < DEMO_PROGRAM_COUNT; i++) {
+        if (i > 0) pos += snprintf(json + pos, sizeof(json) - pos, ",");
+        pos += snprintf(json + pos, sizeof(json) - pos,
+            "{\"name\":\"%s\",\"desc\":\"%s\"}",
+            DEMO_PROGRAMS[i].name, DEMO_PROGRAMS[i].desc);
+    }
+    /* 标记当前加载的是哪个程序 */
+    const char *cur = g_elf_path;
+    if (cur) {
+        for (int i = 0; i < DEMO_PROGRAM_COUNT; i++) {
+            if (strstr(cur, DEMO_PROGRAMS[i].name)) {
+                pos += snprintf(json + pos, sizeof(json) - pos,
+                    "],\"current\":\"%s\"}", DEMO_PROGRAMS[i].name);
+                send_json(client, 200, json);
+                return;
+            }
+        }
+    }
+    pos += snprintf(json + pos, sizeof(json) - pos, "],\"current\":null}");
+    send_json(client, 200, json);
+}
+
+/* POST /program — 加载指定 demo 程序 */
+static void route_post_program(SOCKET client, const HttpRequest *req)
+{
+    const char *body = req->body;
+    if (!body) {
+        send_json(client, 400, "{\"status\":\"error\",\"message\":\"Missing body\"}");
+        return;
+    }
+    /* 查找 name 字段 */
+    const char *key = "\"program\"";
+    const char *p = strstr(body, key);
+    if (!p) {
+        send_json(client, 400, "{\"status\":\"error\",\"message\":\"Missing program name\"}");
+        return;
+    }
+    p += strlen(key);
+    while (*p == ' ' || *p == ':' || *p == '"') p++;
+    char name[32];
+    int i = 0;
+    while (*p && *p != '"' && i < 31) name[i++] = *p++;
+    name[i] = '\0';
+
+    /* 在 demo 列表中查找 */
+    const DemoProgram *dp = NULL;
+    for (int j = 0; j < DEMO_PROGRAM_COUNT; j++) {
+        if (strcmp(DEMO_PROGRAMS[j].name, name) == 0) {
+            dp = &DEMO_PROGRAMS[j];
+            break;
+        }
+    }
+    if (!dp) {
+        send_json(client, 404, "{\"status\":\"error\",\"message\":\"Program not found\"}");
+        return;
+    }
+
+    /* 写入 ELF 文件 */
+    char fname[64];
+    snprintf(fname, sizeof(fname), "demo_%s.elf", dp->name);
+    FILE *fp = fopen(fname, "wb");
+    if (!fp) {
+        send_json(client, 500, "{\"status\":\"error\",\"message\":\"Cannot write file\"}");
+        return;
+    }
+    fwrite(dp->data, 1, dp->size, fp);
+    fclose(fp);
+
+    /* 重载 ELF */
+    sim_lock(g_sim);
+    sim_reload(g_sim);
+    bool ok = sim_load_elf(g_sim, fname);
+    if (ok) {
+        strncpy(g_elf_path, fname, sizeof(g_elf_path) - 1);
+        g_elf_path[sizeof(g_elf_path) - 1] = '\0';
+    }
+    sim_unlock(g_sim);
+
+    if (ok) {
+        char resp[256];
+        snprintf(resp, sizeof(resp),
+            "{\"status\":\"ok\",\"program\":\"%s\",\"entry\":\"0x%08x\"}",
+            name, g_sim->cpu.pc);
+        send_json(client, 200, resp);
+        printf("[program] Loaded: %s\n", name);
+    } else {
+        send_json(client, 500, "{\"status\":\"error\",\"message\":\"Load failed\"}");
+    }
+}
+
+/* ── (unused on release build) POST /compile — C 源码编译 + 加载 ── */
 static void route_post_compile(SOCKET client, const HttpRequest *req)
 {
     /* ── 1. 从 JSON body 中提取 source 字段 ──────────────────── */
@@ -1720,11 +1824,11 @@ static void dispatch(SOCKET client, const HttpRequest *req)
     else if (strcmp(req->path, "/stop") == 0 && strcmp(req->method, "POST") == 0) {
         route_post_stop(client);
     }
-    else if (strcmp(req->path, "/compile") == 0 && strcmp(req->method, "GET") == 0) {
-        route_get_compile(client);
+    else if (strcmp(req->path, "/programs") == 0 && strcmp(req->method, "GET") == 0) {
+        route_get_programs(client);
     }
-    else if (strcmp(req->path, "/compile") == 0 && strcmp(req->method, "POST") == 0) {
-        route_post_compile(client, req);
+    else if (strcmp(req->path, "/program") == 0 && strcmp(req->method, "POST") == 0) {
+        route_post_program(client, req);
     }
     else if (strcmp(req->path, "/pipeline-state") == 0 && strcmp(req->method, "GET") == 0) {
         route_get_pipeline_state(client);

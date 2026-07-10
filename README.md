@@ -47,8 +47,10 @@ POST /api/stop          停止运行
 GET  /api/datapath      流水线各级寄存器 + Forwarding/Stall/Flush 状态
 GET  /api/disassembly   反汇编
 GET  /pipeline.svg      流水线数据通路 SVG 图
-POST /api/compile       在线编译汇编为 ELF
-GET  /api/compile       编译状态查询
+GET  /api/programs      内置 demo 程序列表
+POST /api/program       切换内置 demo 程序
+POST /api/compile       在线编译（开发分支功能，依赖 RISC-V GCC）
+GET  /api/compile       编译页面（开发分支功能）
 ```
 
 ### 系统组件
@@ -155,6 +157,12 @@ risc-v/
 - **[RISC-V 指令编码学习笔记](docs/前置知识/RISC-V指令编码学习笔记.md)** — 指令编码格式速查。
 - **[Web 调试器使用文档](docs/Web调试器使用文档.md)** — Web 调试器的功能说明与使用方法。
 - **[各模块设计文档](docs/设计文档/)** — CPU、调试器、Loader、Memory 的详细设计。
+
+## 未来计划
+
+- **内置轻量汇编器** — 支持在 Web 调试器中直接编写 RISC-V 汇编代码并编译为 ELF，无需安装 RISC-V GCC 工具链。当前 release 版本提供 5 个内置 demo 程序（Hello World / Fibonacci / 冒泡排序 / 递归阶乘 / 质数判定），可通过 Web 界面下拉框随时切换。
+- **更多系统调用** — 扩展 Linux syscall 支持（open / close / lseek 等），实现文件 I/O。
+- **性能调优** — 流水线前递路径优化、分支预测。
 
 ## 版本记录
 

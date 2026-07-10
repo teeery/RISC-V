@@ -62,7 +62,7 @@
  * 当前简化版（恒等映射）：0x07F00000，在 128MB 物理内存高位。
  * 完善版（MMU Sv32 后）：0xC0000000（团队结论 7，3GB 位置）。
  */
-#define STACK_TOP_DEFAULT   0xC0000000  // 统一使用 0xC0000000（团队结论 7）
+#define STACK_TOP_DEFAULT   0x07F00000  // 在 128MB 物理内存高位，Bare 模式可用
 
 /*
  * 栈大小

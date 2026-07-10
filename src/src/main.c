@@ -1,7 +1,7 @@
 #include "simulator.h"
 #include "debugger/debugger.h"
 #include "debugger/web_server.h"
-#include "default_elf.h"
+#include "demo_programs.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -87,11 +87,11 @@ int main(int argc, char *argv[])
     }
 
     if (!elf_path) {
-        /* 未指定 ELF 文件：使用内置 demo 程序 */
-        const char *default_elf = "builtin_hello.elf";
+        /* 未指定 ELF 文件：使用内置 demo 程序（默认 hello） */
+        const char *default_elf = "demo_hello.elf";
         FILE *fp = fopen(default_elf, "wb");
         if (fp) {
-            fwrite(DEFAULT_ELF_DATA, 1, DEFAULT_ELF_SIZE, fp);
+            fwrite(DEMO_PROGRAMS[0].data, 1, DEMO_PROGRAMS[0].size, fp);
             fclose(fp);
             elf_path = default_elf;
             printf("No ELF specified, using built-in demo program.\n");
