@@ -36,6 +36,7 @@
 #include "cpu/datapath/alu.h"
 #include "cpu/exec_internal.h"
 #include "memory/mmu.h"
+#include "linux/syscall.h"
 #include "types.h"
 #include <stdio.h>
 #include <string.h>
@@ -81,6 +82,137 @@ static inline bool mc_is_fp_op(uint8_t opcode)
            (opcode == 0x4B) || (opcode == 0x4F);
 }
 
+/* ── ALU 操作名查找表 ──────────────────────────────────────────── */
+static const char *mc_alu_op_name(AluOp op)
+{
+    switch (op) {
+        case ALU_ADD:  return "add";
+        case ALU_SUB:  return "sub";
+        case ALU_SLL:  return "sll";
+        case ALU_SLT:  return "slt";
+        case ALU_SLTU: return "sltu";
+        case ALU_XOR:  return "xor";
+        case ALU_SRL:  return "srl";
+        case ALU_SRA:  return "sra";
+        case ALU_OR:   return "or";
+        case ALU_AND:  return "and";
+        default:       return "?";
+    }
+}
+
+/* ── 填充 DatapathState（多周期指令完成时调用）──────────────────── */
+static void mc_fill_dp(Simulator *sim, const DecodedInstr *d,
+                       uint32_t pc, uint32_t next_pc,
+                       uint32_t a, uint32_t b,
+                       uint32_t alu_out, uint32_t mdr, bool load_done)
+{
+    DatapathState *dp = &sim->dp;
+    memset(dp, 0, sizeof(*dp));
+    dp->pc     = pc;
+    dp->instr  = sim->mc.ir;
+    dp->opcode = d->opcode;
+    dp->rd     = d->rd;
+    dp->rs1    = d->rs1;
+    dp->rs2    = d->rs2;
+    dp->funct3 = d->funct3;
+    dp->funct7 = d->funct7;
+    dp->imm    = d->imm;
+    dp->rs1_val = a;
+    dp->rs2_val = b;
+    dp->next_pc = next_pc;
+    cpu_disasm(sim->mc.ir, pc, dp->disasm, sizeof(dp->disasm));
+
+    dp->reg_write = (d->rd != 0);
+    if (dp->reg_write) {
+        dp->rd_val = load_done ? mdr : alu_out;
+    }
+
+    switch (d->opcode) {
+    case 0x13: /* OP-IMM */
+        {
+            AluOp op = alu_select_op(d->funct3, d->funct7, false);
+            strncpy(dp->alu_op, mc_alu_op_name(op), sizeof(dp->alu_op) - 1);
+            dp->alu_a = a;
+            dp->alu_b = (uint32_t)d->imm;
+            dp->alu_result = alu_compute(op, dp->alu_a, dp->alu_b);
+        }
+        break;
+    case 0x33: /* OP */
+        if (d->funct7 == 1) {
+            strncpy(dp->alu_op, "mul", sizeof(dp->alu_op) - 1);
+            dp->alu_a = a;
+            dp->alu_b = b;
+            dp->alu_result = sim->cpu.regs[d->rd];
+        } else {
+            AluOp op = alu_select_op(d->funct3, d->funct7, true);
+            strncpy(dp->alu_op, mc_alu_op_name(op), sizeof(dp->alu_op) - 1);
+            dp->alu_a = a;
+            dp->alu_b = b;
+            dp->alu_result = alu_compute(op, dp->alu_a, dp->alu_b);
+        }
+        break;
+    case 0x03: /* LOAD */
+        strncpy(dp->alu_op, "add", sizeof(dp->alu_op) - 1);
+        dp->alu_a = a;
+        dp->alu_b = (uint32_t)d->imm;
+        dp->alu_result = alu_out;
+        dp->mem_addr = alu_out;
+        dp->mem_read = true;
+        dp->mem_rdata = mdr;
+        break;
+    case 0x23: /* STORE */
+        strncpy(dp->alu_op, "add", sizeof(dp->alu_op) - 1);
+        dp->alu_a = a;
+        dp->alu_b = (uint32_t)d->imm;
+        dp->alu_result = alu_out;
+        dp->mem_addr = alu_out;
+        dp->mem_write = true;
+        dp->mem_wdata = b;
+        break;
+    case 0x63: /* BRANCH */
+        strncpy(dp->alu_op, "sub", sizeof(dp->alu_op) - 1);
+        dp->alu_a = a;
+        dp->alu_b = b;
+        dp->branch_taken = (next_pc != pc + 4);
+        break;
+    case 0x6F: /* JAL */
+        strncpy(dp->alu_op, "add", sizeof(dp->alu_op) - 1);
+        dp->alu_a = pc;
+        dp->alu_b = 4;
+        dp->alu_result = pc + 4;
+        dp->reg_write = true;
+        dp->rd_val = pc + 4;
+        dp->branch_taken = true;
+        break;
+    case 0x67: /* JALR */
+        strncpy(dp->alu_op, "add", sizeof(dp->alu_op) - 1);
+        dp->alu_a = a;
+        dp->alu_b = (uint32_t)d->imm;
+        dp->alu_result = (a + (uint32_t)d->imm) & ~1u;
+        dp->reg_write = true;
+        dp->rd_val = pc + 4;
+        dp->branch_taken = true;
+        break;
+    case 0x17: /* AUIPC */
+        strncpy(dp->alu_op, "add", sizeof(dp->alu_op) - 1);
+        dp->alu_a = pc;
+        dp->alu_b = (uint32_t)d->imm;
+        dp->alu_result = pc + (uint32_t)d->imm;
+        break;
+    case 0x37: /* LUI */
+        strncpy(dp->alu_op, "none", sizeof(dp->alu_op) - 1);
+        dp->alu_result = (uint32_t)d->imm;
+        break;
+    default:
+        strncpy(dp->alu_op, "none", sizeof(dp->alu_op) - 1);
+        break;
+    }
+    dp->valid = true;
+
+    /* 更新 FSM 状态名 */
+    strncpy(dp->fsm_state, sim->mc.fsm_name, sizeof(dp->fsm_state) - 1);
+}
+
 /* ════════════════════════════════════════════════════════════
  * sim_step_multi — 多周期 CPU：推进 1 个 FSM 状态
  *
@@ -111,6 +243,10 @@ void sim_step_multi(Simulator *sim)
      * ════════════════════════════════════════════════════════
      */
     if (mc->state == MC_IF) {
+        strncpy(mc->fsm_name, "IF", sizeof(mc->fsm_name) - 1);
+        strncpy(sim->dp.fsm_state, "IF", sizeof(sim->dp.fsm_state) - 1);
+        sim->dp.valid = false;
+        sim->dp.pc = cpu->pc;
 
         mc->pc = cpu->pc;   /* 保存当前指令 PC */
 
@@ -135,8 +271,11 @@ void sim_step_multi(Simulator *sim)
      * ════════════════════════════════════════════════════════
      */
     if (mc->state == MC_ID) {
+        strncpy(mc->fsm_name, "ID", sizeof(mc->fsm_name) - 1);
+        strncpy(sim->dp.fsm_state, "ID", sizeof(sim->dp.fsm_state) - 1);
 
         DecodedInstr d = cpu_decode(mc->ir);
+        mc->ir_decoded = d;  /* 缓存解码结果，跨状态复用 */
 
         /* 读寄存器（所有指令都读，多路选择器在 EX 阶段选） */
         mc->a = cpu->regs[d.rs1];
@@ -170,7 +309,8 @@ void sim_step_multi(Simulator *sim)
     }
 
     /* ── 解码当前指令（EX/MEM/WB 状态都需要）──────────────────── */
-    DecodedInstr d = cpu_decode(mc->ir);
+    /* 使用 ID 阶段缓存的解码结果 */
+    DecodedInstr d = mc->ir_decoded;
 
     /* ════════════════════════════════════════════════════════
      * State 2: EX — 执行 / 地址计算
@@ -190,6 +330,8 @@ void sim_step_multi(Simulator *sim)
      * ════════════════════════════════════════════════════════
      */
     if (mc->state == MC_EX) {
+        strncpy(mc->fsm_name, "EX", sizeof(mc->fsm_name) - 1);
+        strncpy(sim->dp.fsm_state, "EX", sizeof(sim->dp.fsm_state) - 1);
 
         bool instr_done = false;   /* 本指令在此状态完成后结束 */
         bool needs_wb   = false;   /* 进入 WB 状态（而不是 MEM） */
@@ -283,13 +425,15 @@ void sim_step_multi(Simulator *sim)
                 uint32_t saved_next_pc = mc->next_pc;
                 if (d.funct3 == 0) {
                     if (d.imm == 0) {                    /* ECALL */
-                        cpu_trap(sim, EXC_ECALL_M, 0);
+                        syscall_handler(sim);
                     } else if (d.imm == 1) {             /* EBREAK */
                         cpu_trap(sim, EXC_BREAKPOINT, mc->pc);
                     } else if (d.imm == 0x302) {         /* MRET */
                         cpu->priv = (cpu->mstatus >> 11) & 0x3;
-                        cpu->mstatus = (cpu->mstatus & ~(1u << 7))
-                                     | ((cpu->mstatus >> 3) & 1) << 3;
+                        /* MRET: MIE ← MPIE, MPIE ← 1 */
+                        uint32_t mpie_mc = (cpu->mstatus >> 7) & 1;
+                        cpu->mstatus = (cpu->mstatus & ~((1u << 7) | (1u << 3)))
+                                     | (mpie_mc << 3) | (1u << 7);
                         mc->next_pc = cpu->mepc;
                     } else {
                         cpu_trap(sim, EXC_ILLEGAL_INST, d.opcode);
@@ -353,6 +497,9 @@ void sim_step_multi(Simulator *sim)
             mc->state = MC_IF;
             sim->instr_count++;
             sim->cpu.pc = mc->next_pc;
+            /* 填充数据通路信号 */
+            mc_fill_dp(sim, &d, mc->pc, mc->next_pc,
+                       mc->a, mc->b, mc->alu_out, mc->mdr, false);
         } else if (mc_needs_mem(d.opcode)) {
             mc->state = MC_MEM;
         } else if (needs_wb || mc_needs_wb_after_ex(d.opcode)) {
@@ -374,6 +521,8 @@ void sim_step_multi(Simulator *sim)
      * ════════════════════════════════════════════════════════
      */
     if (mc->state == MC_MEM) {
+        strncpy(mc->fsm_name, "MEM", sizeof(mc->fsm_name) - 1);
+        strncpy(sim->dp.fsm_state, "MEM", sizeof(sim->dp.fsm_state) - 1);
 
         switch (d.opcode) {
         case 0x03:   /* Load: LB/LH/LW/LBU/LHU */
@@ -469,6 +618,8 @@ void sim_step_multi(Simulator *sim)
             mc->state = MC_IF;   /* Store: MEM → IF（无 WB） */
             sim->instr_count++;
             sim->cpu.pc = mc->next_pc;
+            mc_fill_dp(sim, &d, mc->pc, mc->next_pc,
+                       mc->a, mc->b, mc->alu_out, mc->mdr, false);
             break;
 
         case 0x07:   /* FLW — 浮点 Load */
@@ -483,10 +634,10 @@ void sim_step_multi(Simulator *sim)
             mc->state = MC_WB;   /* FLW: MEM → WB */
             break;
 
-        case 0x27:   /* FSW — 浮点 Store */
+        case 0x27:   /* FSW — 浮点 Store（数据来自 fregs，非 regs） */
             {
                 mmu_write_32(&sim->mmu, &sim->pmem, mc->alu_out,
-                             mc->b, cpu->priv, &exc);
+                             cpu->fregs[d.rs2], cpu->priv, &exc);
                 if (exc != EXC_NONE) {
                     cpu_trap(sim, (uint32_t)exc, mc->alu_out);
                 }
@@ -494,6 +645,8 @@ void sim_step_multi(Simulator *sim)
             mc->state = MC_IF;   /* FSW: MEM → IF（无 WB） */
             sim->instr_count++;
             sim->cpu.pc = mc->next_pc;
+            mc_fill_dp(sim, &d, mc->pc, mc->next_pc,
+                       mc->a, mc->b, mc->alu_out, mc->mdr, false);
             break;
 
         default:
@@ -515,8 +668,11 @@ void sim_step_multi(Simulator *sim)
      * ════════════════════════════════════════════════════════
      */
     if (mc->state == MC_WB) {
+        strncpy(mc->fsm_name, "WB", sizeof(mc->fsm_name) - 1);
+        strncpy(sim->dp.fsm_state, "WB", sizeof(sim->dp.fsm_state) - 1);
 
         bool is_fp = mc_is_fp_op(d.opcode);
+        bool load_done = false;
 
         if (!is_fp && d.rd != 0) {
             /* 整数写回：判断数据来源 */
@@ -527,12 +683,17 @@ void sim_step_multi(Simulator *sim)
                 } else {
                     cpu->regs[d.rd] = mc->mdr;    /* LW/LH/LB → 整数寄存器 */
                 }
+                load_done = true;
             } else {
                 /* ALU 类：数据来自 ALUOut */
                 cpu->regs[d.rd] = mc->alu_out;
             }
         } else if (is_fp) {
-            /* 浮点结果已在 EX 阶段由 exec_fp_op/exec_fma 写入 fregs */
+            /* 浮点结果：0x53/0x43/0x47/0x4B/0x4F 已在 EX 阶段写入 fregs；
+             * 0x07 (FLW) 数据来自 MEM 阶段的 MDR，需在此写入 fregs */
+            if (d.opcode == 0x07 && d.rd != 0) {
+                cpu->fregs[d.rd] = mc->mdr;
+            }
         }
 
         /* x0 硬连线 */
@@ -542,6 +703,10 @@ void sim_step_multi(Simulator *sim)
         sim->instr_count++;
         sim->cpu.pc = mc->next_pc;
         mc->state = MC_IF;
+
+        /* 填充数据通路信号 */
+        mc_fill_dp(sim, &d, mc->pc, mc->next_pc,
+                   mc->a, mc->b, mc->alu_out, mc->mdr, load_done);
         return;
     }
 }

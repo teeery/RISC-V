@@ -272,8 +272,11 @@ bool exec_system(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
             cpu_trap(sim, EXC_BREAKPOINT, cpu->pc);
         } else if (dec->imm == 0x302) {         /* MRET */
             cpu->priv = (cpu->mstatus >> 11) & 0x3;   /* MPP → priv */
-            cpu->mstatus = (cpu->mstatus & ~(1u << 7))
-                         | ((cpu->mstatus >> 3) & 1) << 3;  /* MPIE→MIE */
+            /* MRET: MIE ← MPIE, MPIE ← 1 (RISC-V Privileged Spec §3.1.6.1) */
+            uint32_t mpie = (cpu->mstatus >> 7) & 1;
+            cpu->mstatus = (cpu->mstatus & ~((1u << 7) | (1u << 3)))
+                         | (mpie << 3)        /* MPIE → MIE */
+                         | (1u << 7);          /* MPIE ← 1  */
             *next_pc = cpu->mepc;              /* 返回异常地址 */
         } else {
             cpu_trap(sim, EXC_ILLEGAL_INST, dec->opcode);

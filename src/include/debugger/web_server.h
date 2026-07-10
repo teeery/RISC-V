@@ -30,6 +30,6 @@ struct Simulator;  /* 前置声明 */
  *
  * 返回值：EXIT_SUCCESS 正常退出，EXIT_FAILURE 启动失败
  */
-int web_server_start(struct Simulator *sim, int port);
+int web_server_start(struct Simulator *sim, int port, const char *elf_path);
 
 #endif /* WEB_SERVER_H */

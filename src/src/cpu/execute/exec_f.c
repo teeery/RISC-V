@@ -193,12 +193,29 @@ bool exec_fp_op(Simulator *sim, DecodedInstr *dec, uint32_t *next_pc)
     case 0x60:
         op_a.u = sim->cpu.fregs[dec->rs1];
         if (dec->rs2 == 0) {
-            /* FCVT.W.S — 有符号 */
-            s32 = (int32_t)op_a.f;      // C 截断向零，符合 RISC-V RTZ
+            /* FCVT.W.S — 有符号，向零舍入 (RTZ)
+             * RISC-V 规范：NaN → 2³¹-1, +∞ → 2³¹-1, -∞ → -2³¹,
+             * 越界值饱和到 INT32_MAX / INT32_MIN */
+            if (isnan(op_a.f)) {
+                s32 = INT32_MAX;
+            } else if (op_a.f >= (float)INT32_MAX) {
+                s32 = INT32_MAX;
+            } else if (op_a.f <= (float)INT32_MIN) {
+                s32 = INT32_MIN;
+            } else {
+                s32 = (int32_t)op_a.f;  /* C truncation towards zero = RISC-V RTZ */
+            }
             sim->cpu.regs[dec->rd] = (uint32_t)s32;
         } else {
-            /* FCVT.WU.S — 无符号 */
-            u32 = (uint32_t)op_a.f;     // C 截断向零
+            /* FCVT.WU.S — 无符号，向零舍入 (RTZ)
+             * RISC-V 规范：NaN → 2³²-1, -0 → 0, 负数 → 0, 超大值 → 2³²-1 */
+            if (isnan(op_a.f) || op_a.f >= (float)UINT32_MAX) {
+                u32 = UINT32_MAX;
+            } else if (op_a.f <= 0.0f) {
+                u32 = 0;
+            } else {
+                u32 = (uint32_t)op_a.f;  /* C truncation towards zero = RISC-V RTZ */
+            }
             sim->cpu.regs[dec->rd] = u32;
         }
         return true;

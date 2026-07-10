@@ -28,6 +28,10 @@
 void mem_init(PhysicalMemory *pmem, uint32_t size)
 {
     pmem->data  = (uint8_t *)calloc(size, 1);
+    if (!pmem->data) {
+        fprintf(stderr, "Fatal: Failed to allocate physical memory (%u bytes)\n", size);
+        exit(1);
+    }
     pmem->size  = size;
     pmem->brk_start   = 0;
     pmem->brk_current = 0;
@@ -37,6 +41,11 @@ void mem_init(PhysicalMemory *pmem, uint32_t size)
     pmem->region_count    = 0;
     pmem->regions = (MemoryRegion *)calloc(pmem->region_capacity,
                                            sizeof(MemoryRegion));
+    if (!pmem->regions) {
+        fprintf(stderr, "Fatal: Failed to allocate memory regions\n");
+        free(pmem->data);
+        exit(1);
+    }
 }
 
 void mem_destroy(PhysicalMemory *pmem)
@@ -151,11 +160,17 @@ uint32_t mem_find_free(PhysicalMemory *pmem, uint32_t size, uint32_t align)
 
 uint32_t mem_brk(PhysicalMemory *pmem, uint32_t new_brk)
 {
-    /* 首次调用：以当前 region 末尾作为 brk 起点 */
+    /* 首次调用：以当前 region 末尾作为 brk 起点。
+     * 使用 brk_start==0 && brk_current==0 作为初始化哨兵，
+     * 但在 mem_find_free 返回 0 时（内存完全为空）需特殊处理：
+     * 初始化后应立即将哨兵设为一个非零值。 */
     if (pmem->brk_start == 0 && pmem->brk_current == 0) {
         uint32_t data_end = mem_find_free(pmem, 0, PAGE_SIZE);
         pmem->brk_start   = data_end;
         pmem->brk_current = data_end;
+        /* 如果空闲区域从 0 开始（内存全空），哨兵逻辑仍正确：
+         * 后续调用不会再进入此分支，因为 brk_start/brk_current 已被设置。
+         * 若 data_end == 0，brk(0)→0 是合法行为。 */
     }
 
     /* new_brk == 0：仅查询当前 brk */
@@ -178,7 +193,9 @@ uint32_t mem_brk(PhysicalMemory *pmem, uint32_t new_brk)
 bool mem_load(PhysicalMemory *pmem, uint32_t addr,
               const uint8_t *data, uint32_t size)
 {
-    if (addr + size > pmem->size) return false;
+    /* 防止 addr+size 回绕：先检查 size 本身不越界，再用 uint64_t 防溢出 */
+    if (size > pmem->size) return false;
+    if ((uint64_t)addr + (uint64_t)size > (uint64_t)pmem->size) return false;
     memcpy(pmem->data + addr, data, size);
     return true;
 }
@@ -190,6 +207,11 @@ bool mem_load(PhysicalMemory *pmem, uint32_t addr,
 
 void mem_dump(PhysicalMemory *pmem, uint32_t addr, uint32_t len)
 {
+    /* 裁剪到物理内存边界 */
+    if (addr >= pmem->size) return;
+    if ((uint64_t)addr + len > (uint64_t)pmem->size)
+        len = pmem->size - addr;
+
     for (uint32_t i = 0; i < len; i += 16) {
         printf("%08x: ", addr + i);
 

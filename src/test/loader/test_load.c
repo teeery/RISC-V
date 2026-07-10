@@ -35,6 +35,8 @@ int main(void) {
     /* ── 初始化 ── */
     mem_init(&pmem, MEM_SIZE_DEFAULT);
     mmu_init(&mmu);
+    /* 映射栈区域（0xC0000000 附近）供 stack R/W 测试使用 */
+    mem_map(&pmem, 0xBFFC0000, 256 * 1024, MEM_READ | MEM_WRITE, "stack");
 
     /* ── 测试 1：加载合法 RISC-V ELF ── */
     {
@@ -60,9 +62,9 @@ int main(void) {
 
     /* ── 测试 4：验证代码段已加载 ──
      *
-     * minimal.elf 里第一条指令是 addi a0, zero, 42
-     * 编码 = 0x02A00513
-     * 在内存中（小端序）= 13 05 A0 02
+     * minimal.elf 里第一条指令是 addi a7, zero, 93（li a7, 93 = SYS_exit）
+     * 编码 = 0x05d00893
+     * 在内存中（小端序）= 93 08 d0 05
      */
     {
         ExceptionType exc = EXC_NONE;
@@ -75,10 +77,10 @@ int main(void) {
         if (exc != EXC_NONE) FAIL("exc should be EXC_NONE");
 
         printf("    insn @ 0x%08x = 0x%08x\n", entry, insn);
-        /* 验证是 addi a0, zero, 42 */
-        if (insn != 0x02A00513)
-            FAIL("first instruction should be addi a0,zero,42 (0x02A00513)");
-        PASS("first instruction = addi a0, zero, 42");
+        /* 验证是 addi a7, zero, 93 */
+        if (insn != 0x05d00893)
+            FAIL("first instruction should be addi a7,zero,93 (0x05d00893)");
+        PASS("first instruction = addi a7, zero, 93");
     }
 
     /* ── 测试 5：验证栈区域可读写 ── */

@@ -61,7 +61,7 @@ typedef struct {
     char method[8];           /* GET / POST / DELETE */
     char path[MAX_PATH_LEN];  /* /registers 等 */
     char query[256];          /* addr=0x1000&count=16 */
-    char body[2048];          /* POST body */
+    char body[16384];         /* POST body（大 buffer 支持长源码编译） */
     int  body_len;
 } HttpRequest;
 
@@ -69,6 +69,7 @@ typedef struct {
 static Simulator *g_sim;
 static int        g_server_port;
 static volatile bool g_server_running;
+static char       g_elf_path[512];  /* 当前加载的 ELF 路径 */
 
 /* ── 前向声明 ─────────────────────────────────────────────────── */
 static void handle_request(SOCKET client);
@@ -89,6 +90,11 @@ static void jb_init(JsonBuf *jb)
 {
     jb->cap = 512;
     jb->buf = malloc((size_t)jb->cap);
+    if (!jb->buf) {
+        jb->cap = 0;
+        jb->len = 0;
+        return;
+    }
     jb->buf[0] = '\0';
     jb->len = 0;
 }
@@ -105,8 +111,15 @@ static void jb_append(JsonBuf *jb, const char *s)
 {
     int slen = (int)strlen(s);
     if (jb->len + slen + 1 > jb->cap) {
-        jb->cap = (jb->len + slen + 1) * 2;
-        jb->buf = realloc(jb->buf, (size_t)jb->cap);
+        int new_cap = (jb->len + slen + 1) * 2;
+        char *new_buf = realloc(jb->buf, (size_t)new_cap);
+        if (!new_buf) {
+            /* OOM: 保持 jb->buf 不变（可能为 NULL），调用方应在
+             * jb_free 后检查 jb->buf 或直接返回错误 */
+            return;
+        }
+        jb->buf = new_buf;
+        jb->cap = new_cap;
     }
     memcpy(jb->buf + jb->len, s, (size_t)slen + 1);
     jb->len += slen;
@@ -136,7 +149,7 @@ static void jb_append_escaped(JsonBuf *jb, const char *s)
 
 static void jb_printf(JsonBuf *jb, const char *fmt, ...)
 {
-    char tmp[512];
+    char tmp[1024];  /* 增大缓冲区，减少截断风险 */
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(tmp, sizeof(tmp), fmt, ap);
@@ -259,7 +272,11 @@ static void route_get_status(SOCKET client)
     jb_printf(&jb, "\"priv\":%d,", (int)g_sim->cpu.priv);
     jb_printf(&jb, "\"instr_count\":%" PRIu64 ",", g_sim->instr_count);
     jb_printf(&jb, "\"cycle_count\":%" PRIu64 ",", g_sim->cycle_count);
-    jb_printf(&jb, "\"bp_count\":%d", g_sim->bp_count);
+    jb_printf(&jb, "\"bp_count\":%d,", g_sim->bp_count);
+    jb_printf(&jb, "\"cpu_model\":%d,", (int)g_sim->cpu_model);
+    jb_printf(&jb, "\"cpu_model_name\":\"%s\"",
+              (g_sim->cpu_model == MODEL_SINGLE_CYCLE) ? "single" :
+              (g_sim->cpu_model == MODEL_MULTI_CYCLE)  ? "multi" : "pipeline");
     jb_append(&jb, "}");
     sim_unlock(g_sim);
 
@@ -582,24 +599,30 @@ static void route_post_step(SOCKET client)
 
     /* 获取执行的指令反汇编 */
     char disasm[128] = "";
+    uint32_t instr = 0;
     {
         ExceptionType exc = EXC_NONE;
-        uint32_t instr;
         if (mmu_read_32(&g_sim->mmu, &g_sim->pmem, pc_before, &instr,
                         g_sim->cpu.priv, &exc)) {
             cpu_disasm(instr, pc_before, disasm, sizeof(disasm));
         }
     }
 
-    char resp[512];
-    snprintf(resp, sizeof(resp),
-             "{\"status\":\"ok\",\"pc_before\":%u,\"pc_after\":%u,"
-             "\"disasm\":\"%s\",\"running\":%s}",
-             pc_before, g_sim->cpu.pc, disasm,
-             g_sim->cpu.running ? "true" : "false");
+    /* 使用 JsonBuf 安全构建 JSON（对 disasm 做转义） */
+    JsonBuf jb;
+    jb_init(&jb);
+    jb_append(&jb, "{\"status\":\"ok\",\"pc_before\":");
+    jb_printf(&jb, "%u,\"pc_after\":%u,\"instr\":%u,\"disasm\":", pc_before, g_sim->cpu.pc, instr);
+    jb_append_escaped(&jb, disasm);
+    jb_printf(&jb, ",\"running\":%s,\"fsm_state\":",
+              g_sim->cpu.running ? "true" : "false");
+    jb_append_escaped(&jb, g_sim->dp.fsm_state[0] ? g_sim->dp.fsm_state : "");
+    jb_printf(&jb, ",\"instr_count\":%" PRIu64 ",\"cycle_count\":%" PRIu64 "}",
+              g_sim->instr_count, g_sim->cycle_count);
     sim_unlock(g_sim);
 
-    send_json(client, 200, resp);
+    send_json(client, 200, jb.buf);
+    jb_free(&jb);
 }
 
 /* GET /datapath — 数据通路信号状态（SVG 可视化用） */
@@ -608,7 +631,7 @@ static void route_get_datapath(SOCKET client)
     sim_lock(g_sim);
     DatapathState *dp = &g_sim->dp;
 
-    char json[2048];
+    char json[3072];
     snprintf(json, sizeof(json),
         "{"
         "\"valid\":%s,"
@@ -626,7 +649,11 @@ static void route_get_datapath(SOCKET client)
         "\"branch_taken\":%s,"
         "\"next_pc\":%u,"
         "\"reg_write\":%s,"
-        "\"disasm\":\"%s\""
+        "\"disasm\":\"%s\","
+        "\"fsm_state\":\"%s\","
+        "\"stall\":%s,\"flush\":%s,"
+        "\"fwd_a\":%s,\"fwd_b\":%s,"
+        "\"pipe_valid_mask\":%u"
         "}",
         dp->valid ? "true" : "false",
         dp->pc, dp->instr, dp->opcode,
@@ -642,7 +669,13 @@ static void route_get_datapath(SOCKET client)
         dp->branch_taken ? "true" : "false",
         dp->next_pc,
         dp->reg_write ? "true" : "false",
-        dp->disasm);
+        dp->disasm,
+        dp->fsm_state[0] ? dp->fsm_state : "",
+        dp->stall ? "true" : "false",
+        dp->flush ? "true" : "false",
+        dp->fwd_a ? "true" : "false",
+        dp->fwd_b ? "true" : "false",
+        dp->pipe_valid_mask);
     sim_unlock(g_sim);
 
     send_json(client, 200, json);
@@ -719,28 +752,50 @@ static void route_post_continue(SOCKET client)
 /* POST /stop — 终止 Web 服务器 */
 static void route_post_stop(SOCKET client)
 {
+    /* 清理临时编译文件 */
+    remove(COMPILE_INPUT);
+    remove(COMPILE_OUTPUT);
     send_json(client, 200, "{\"status\":\"ok\",\"message\":\"Server stopping\"}");
     g_server_running = false;
 }
 
-/* GET /pipeline.svg — 流水线数据通路图（从文件读取） */
-static void route_get_pipeline_svg(SOCKET client)
+/* GET /datapath.svg — 根据 CPU 模型返回对应的数据通路图 */
+static void route_get_datapath_svg(SOCKET client)
 {
+    const char *filename = NULL;
+
+    sim_lock(g_sim);
+    switch (g_sim->cpu_model) {
+        case MODEL_SINGLE_CYCLE:
+            filename = "datapath_single_dynamic.svg";
+            break;
+        case MODEL_MULTI_CYCLE:
+            /* 多周期暂用单周期图（数据通路相同，仅控制不同） */
+            filename = "datapath_single_dynamic.svg";
+            break;
+        case MODEL_PIPELINE:
+        default:
+            filename = "datapath_pipeline_dynamic.svg";
+            break;
+    }
+    sim_unlock(g_sim);
+
     /* 尝试多个路径 */
-    const char *paths[] = {
-        "src/src/debugger/datapath_pipeline_dynamic.svg",
-        "../src/src/debugger/datapath_pipeline_dynamic.svg",
-        "datapath_pipeline_dynamic.svg",
-        "docs/datapath_pipeline_dynamic.svg",
-        "../docs/datapath_pipeline_dynamic.svg",
+    const char *dirs[] = {
+        "src/src/debugger/",
+        "../src/src/debugger/",
+        "docs/",
+        "../docs/",
         NULL
     };
 
     char *content = NULL;
     long fsize = 0;
 
-    for (int i = 0; paths[i]; i++) {
-        FILE *f = fopen(paths[i], "rb");
+    for (int i = 0; dirs[i]; i++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s%s", dirs[i], filename);
+        FILE *f = fopen(path, "rb");
         if (f) {
             fseek(f, 0, SEEK_END);
             fsize = ftell(f);
@@ -756,7 +811,7 @@ static void route_get_pipeline_svg(SOCKET client)
     }
 
     if (!content) {
-        send_json(client, 404, "{\"status\":\"error\",\"message\":\"Pipeline SVG not found\"}");
+        send_json(client, 404, "{\"status\":\"error\",\"message\":\"Datapath SVG not found\"}");
         return;
     }
 
@@ -773,7 +828,7 @@ static void route_get_index(SOCKET client)
         "<head>\r\n"
         "<meta charset=\"UTF-8\">\r\n"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\r\n"
-        "<title>RISC-V Debugger</title>\r\n"
+        "<title>RISC-V Debugger v2</title>\r\n"
         "<style>\r\n"
         "*{box-sizing:border-box;margin:0;padding:0}\r\n"
         "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#eef0f4;color:#222;height:100vh;display:flex;flex-direction:column;overflow:hidden}\r\n"
@@ -837,11 +892,18 @@ static void route_get_index(SOCKET client)
         ".log-bar{flex-shrink:0;height:80px;background:#fafbfc;border-top:1px solid #d4d8e0;overflow-y:auto;padding:4px 14px;font-family:'Cascadia Code',Consolas,monospace;font-size:10.5px;color:#666;line-height:1.5}\r\n"
         ".log-bar .e{padding:0 2px}\r\n"
         ".row-sm{display:flex;align-items:center;gap:5px;padding:3px 10px}\r\n"
+        "select{padding:3px 6px;border:1px solid #c0c4cc;border-radius:4px;font-size:10px;background:#fff;color:#333;font-weight:500;outline:none;cursor:pointer}\r\n"
+        "select:focus{border-color:#1a73e8}\r\n"
         "</style>\r\n"
         "</head>\r\n"
         "<body>\r\n"
         "<div class=\"toolbar\">\r\n"
         "<span class=\"title\">RISC-V Simulator</span>\r\n"
+        "<select id=\"model_sel\" onchange=\"switchModel()\" style=\"padding:3px 6px;border:1px solid #c0c4cc;border-radius:4px;font-size:10px;background:#fff;color:#333;font-weight:500\">\r\n"
+        "<option value=\"single\">Single-Cycle</option>\r\n"
+        "<option value=\"multi\">Multi-Cycle</option>\r\n"
+        "<option value=\"pipeline\" selected>Pipeline</option>\r\n"
+        "</select>\r\n"
         "<span style=\"flex:1\"></span>\r\n"
         "<button class=\"outline\" onclick=\"location.href='/compile'\">C Compiler</button>\r\n"
         "<span class=\"stat stopped\" id=\"status\">Stopped</span>\r\n"
@@ -863,6 +925,9 @@ static void route_get_index(SOCKET client)
         "</div>\r\n"
         "<!-- Center: Pipeline + instr detail -->\r\n"
         "<div class=\"mid-area\">\r\n"
+        "<div id=\"mode_hint\" style=\"flex-shrink:0;padding:3px 10px;background:#fff;border:1px solid #d4d8e0;border-radius:4px;font-size:10px;color:#888;text-align:center;font-weight:500\">\r\n"
+        "Pipeline Mode — 5-stage pipeline: IF → ID → EX → MEM → WB (each Step = 1 cycle)\r\n"
+        "</div>\r\n"
         "<div class=\"pipe-wrap\" id=\"pipeline\"><div style=\"color:#888;font-size:13px\">Loading pipeline...</div></div>\r\n"
         "<div class=\"instr-bar\" id=\"instr_disp\"><span class=\"pc\">PC:----</span><span class=\"hex\">--------</span><span class=\"asm\">No instruction executed yet</span></div>\r\n"
         "</div>\r\n"
@@ -893,7 +958,8 @@ static void route_get_index(SOCKET client)
         "async function api(m,p,b){try{var o={method:m,headers:{}};if(b){o.headers['Content-Type']='application/json';o.body=JSON.stringify(b);}var r=await fetch(p,o);var j=await r.json();if(!r.ok){L('[ERR] '+(j.message||r.status));return null;}return j;}catch(e){L('[ERR] '+e.message);return null;}}\r\n"
         "function hx(n){return '0x'+n.toString(16).padStart(8,'0');}\r\n"
         "function setTv(id,txt){var e=document.getElementById(id);if(e)e.textContent=txt;}\r\n"
-        "var g_bps=[],g_mem_addr=0x10000,g_pc=0x10000;\r\n"
+        "var g_bps=[],g_mem_addr=0x10000,g_pc=0x10000,g_cpu_model=2;\r\n"
+        "var MODEL_NAMES=['Single-cycle','Multi-cycle','Pipeline'];\r\n"
         "function ahx(n){return n.toString(16).padStart(8,'0');}\r\n"
         "function navMem(d){g_mem_addr=(g_mem_addr+d)>>>0;var i=document.getElementById('mem_addr');i.value='0x'+g_mem_addr.toString(16);showMem();}\r\n"
         "function gotoText(){g_mem_addr=g_pc;document.getElementById('mem_addr').value='0x'+g_pc.toString(16);showMem();}\r\n"
@@ -918,17 +984,44 @@ static void route_get_index(SOCKET client)
         "async function toggleBpAt(a){for(var i=0;i<g_bps.length;i++){if(g_bps[i].addr===a){await api('DELETE','/breakpoint?id='+g_bps[i].index);await refreshBPs();await refreshAsm();return;}}\r\n"
         "await api('POST','/breakpoint',{addr:a});await refreshBPs();await refreshAsm();}\r\n"
         "async function refreshAsm(){var d=await api('GET','/disassembly');if(d){g_bps=d.bps||g_bps;updateAsm(d);}}\r\n"
-        "async function step(){var d=await api('POST','/step');if(d){L('Step: '+d.disasm);await refreshAll();}}\r\n"
+        "async function step(){var d=await api('POST','/step');if(d){var fsm=d.fsm_state?' ['+d.fsm_state+']':'';var cyc=' (cycles:'+d.cycle_count+' instrs:'+d.instr_count+')';L('Step: '+d.disasm+fsm+cyc);\r\n"
+        "var ib=document.getElementById('instr_disp');ib.innerHTML='<span class=\"pc\">PC:'+hx(d.pc_after)+'</span><span class=\"hex\">'+hx(d.instr)+'</span><span class=\"asm\">'+d.disasm+'</span>';\r\n"
+        "await refreshAll();}}\r\n"
         "async function cont(){var d=await api('POST','/continue');if(d){L('Continue: PC='+hx(d.pc)+(d.running?'':' [stopped]'));await refreshAll();}}\r\n"
         "async function addBP(){var a=document.getElementById('bp_addr').value;var n=parseInt(a);if(isNaN(n)){L('Invalid address: '+a);return;}var r=await api('POST','/breakpoint',{addr:n});if(r){L('BP at '+hx(n));await refreshBPs();await refreshAsm();}}\r\n"
         "async function delBP(i){var r=await api('DELETE','/breakpoint?id='+i);if(r){L('BP '+i+' deleted');await refreshBPs();await refreshAsm();}}\r\n"
         "async function showMem(){var a=document.getElementById('mem_addr').value;var n=parseInt(a.replace(/^0x/i,''),16);if(isNaN(n))return;g_mem_addr=n;document.getElementById('mem_addr').value='0x'+n.toString(16);var r=await api('GET','/memory?addr=0x'+n.toString(16)+'&count=16&unit=w');if(!r)return;var o=document.getElementById('mem_view'),l=[];for(var i=0;i<r.bytes.length;i++){var b=r.bytes[i];if(i%4==0){if(i>0)l.push('\\n');l.push(ahx(r.addr+b.offset)+':');}l.push(b.value.toString(16).padStart(8,'0'));}o.textContent=l.join(' ');o.style.color='#1a1a2e';}\r\n"
         "async function stopSrv(){await api('POST','/stop');}\r\n"
-        "async function refreshAll(){var dp=await api('GET','/datapath');await refresh(dp);await refreshRegs();await refreshAsm();showMem();}\r\n"
+        "async function switchModel(){var sel=document.getElementById('model_sel').value;\r\n"
+        "var r=await api('POST','/cpu-model',{model:sel});\r\n"
+        "if(r){L('Switched to '+r.name+' mode, entry=0x'+r.entry.toString(16));updateModeHint(r.name);\r\n"
+        "await loadDatapath();await refreshAll();}\r\n"  /* reload SVG + refresh */
+        "}\r\n"
+        "function updateModeHint(name){\r\n"
+        "var h=document.getElementById('mode_hint');\r\n"
+        "if(!h)return;\r\n"
+        "if(name==='single')h.textContent='Single-Cycle — datapath diagram is for reference only (1 cycle = 1 instruction)';\r\n"
+        "else if(name==='multi')h.textContent='Multi-Cycle — datapath diagram is for reference only (each Step = 1 FSM state: IF→ID→EX→MEM→WB)';\r\n"
+        "else h.textContent='Pipeline Mode — 5-stage pipeline: IF → ID → EX → MEM → WB (each Step = 1 cycle)';\r\n"
+        "var sel=document.getElementById('model_sel');if(sel)sel.value=name;\r\n"
+        "}\r\n"
+        "async function refreshAll(){var dp=await api('GET','/datapath');await refresh(dp);await refreshRegs();await refreshAsm();showMem();\r\n"
+        "if(g_cpu_model===2){await refreshPipelineState();}}\r\n"
+        "async function refreshPipelineState(){var d=await api('GET','/pipeline-state');if(!d)return;\r\n"
+        "if(d.stall||d.flush){L('Pipeline: stall='+d.stall+' flush='+d.flush);}}\r\n"
         "async function refresh(dp){var s=await api('GET','/status');if(!s)return;\r\n"
         "var el=document.getElementById('status');el.textContent=s.running?'Running':'Stopped';el.className='stat '+(s.running?'running':'stopped');\r\n"
         "document.getElementById('pc_disp').textContent='PC:'+hx(s.pc);document.getElementById('ic_disp').textContent='Instrs:'+s.instr_count;g_pc=s.pc;\r\n"
-        "if(dp&&dp.valid)updateDatapath(dp);}\r\n"
+        "g_cpu_model=(typeof s.cpu_model==='number')?s.cpu_model:g_cpu_model;\r\n"
+        "var mel=document.getElementById('model_disp');if(mel)mel.textContent=MODEL_NAMES[g_cpu_model]||'Unknown';\r\n"
+        "if(dp){updateInstrBar(dp);updateDatapath(dp);}}\r\n"
+        "function updateInstrBar(dp){\r\n"
+        "var ib=document.getElementById('instr_disp');if(!ib)return;\r\n"
+        "var pc_hex=hx(dp.pc);\r\n"
+        "var instr_hex=(dp.instr||dp.instr===0)?hx(dp.instr):'--------';\r\n"
+        "var asm=dp.disasm||((dp.valid||dp.pc!==0)?'':'fetching...');\r\n"
+        "ib.innerHTML='<span class=\"pc\">PC:'+pc_hex+'</span><span class=\"hex\">'+instr_hex+'</span><span class=\"asm\">'+asm+'</span>';\r\n"
+        "}\r\n"
         "function updateDatapath(dp){\r\n"
         "setTv('dv_pc','PC='+hx(dp.pc));\r\n"
         "setTv('dv_instr','INST='+hx(dp.instr));setTv('dv_disasm',dp.disasm);\r\n"
@@ -942,9 +1035,10 @@ static void route_get_index(SOCKET client)
         "setTv('dv_mem_addr',(dp.mem_read||dp.mem_write)?'MEM_ADDR='+hx(dp.mem_addr):'MEM_ADDR=--');\r\n"
         "setTv('dv_mem_rd',dp.mem_read?'MEM_RD='+hx(dp.mem_rdata):'MEM_RD=--');\r\n"
         "setTv('dv_mem_wd',dp.mem_write?'MEM_WD='+hx(dp.mem_wdata):'MEM_WD=--');\r\n"
-        "setTv('dv_fwd','FWD=--');setTv('dv_stall','STALL=0');setTv('dv_flush','FLUSH=0');\r\n"
-        "var ib=document.getElementById('instr_disp');\r\n"
-        "ib.innerHTML='<span class=\"pc\">PC:'+hx(dp.pc)+'</span><span class=\"hex\">'+hx(dp.instr)+'</span><span class=\"asm\">'+dp.disasm+'</span>';\r\n"
+        "setTv('dv_fwd',dp.fwd_a||dp.fwd_b?'FWD='+(dp.fwd_a?'A':'')+(dp.fwd_a&&dp.fwd_b?'/':'')+(dp.fwd_b?'B':''):'FWD=--');\r\n"
+        "setTv('dv_stall',dp.stall?'STALL=1':'STALL=0');\r\n"
+        "setTv('dv_flush',dp.flush?'FLUSH=1':'FLUSH=0');\r\n"
+        "if(dp.fsm_state){setTv('dv_fsm','FSM='+dp.fsm_state);}else{setTv('dv_fsm','');}\r\n"
         "}\r\n"
         "async function refreshRegs(){var d=await api('GET','/registers');if(!d)return;\r\n"
         "var h='<table class=\"rg\">';for(var r=0;r<16;r++){h+='<tr>';for(var c=0;c<2;c++){var i=r+c*16;var x=d.regs[i];h+='<td class=\"rn\">x'+i+'</td><td class=\"ra\">'+x.abi+'</td><td class=\"rv\">'+hx(x.value)+'</td>';if(c==0)h+='<td style=\"width:14px\"></td>';}h+='</tr>';}h+='</table>';\r\n"
@@ -961,9 +1055,12 @@ static void route_get_index(SOCKET client)
         "var h='';for(var i=0;i<g_bps.length;i++){var b=g_bps[i];h+='<div class=\"bp-line\"><span class=\"bi\">#'+b.index+'</span><span class=\"ba\">'+hx(b.addr)+'</span><span style=\"font-size:9px;color:#888\">'+(b.enabled?'on':'off')+'</span><button class=\"small\" onclick=\"delBP('+b.index+')\">Del</button></div>';}\r\n"
         "if(!g_bps.length)h='<span style=\"color:#999;font-size:10px;padding:0 10px\">No breakpoints</span>';\r\n"
         "document.getElementById('bp_list').innerHTML=h;}\r\n"
-        "async function loadPipeline(){var r=await fetch('/pipeline.svg');var t=await r.text();\r\n"
-        "document.getElementById('pipeline').innerHTML=t;}\r\n"
-        "async function init(){await loadPipeline();var dp=await api('GET','/datapath');await refresh(dp);await refreshRegs();await refreshBPs();await refreshAsm();}\r\n"
+        "async function loadDatapath(){var r=await fetch('/pipeline.svg');\r\n"
+        "if(!r.ok){document.getElementById('pipeline').innerHTML='<div style=\"color:#c62828;padding:20px\">SVG not loaded</div>';return;}\r\n"
+        "var t=await r.text();document.getElementById('pipeline').innerHTML=t;}\r\n"
+        "async function init(){await loadDatapath();\r\n"
+        "var s=await api('GET','/status');if(s&&s.cpu_model_name){updateModeHint(s.cpu_model_name);}\r\n"
+        "var dp=await api('GET','/datapath');await refresh(dp);await refreshRegs();await refreshBPs();await refreshAsm();}\r\n"
         "init();\r\n"
         "</script>\r\n"
         "</body></html>\r\n";
@@ -1172,6 +1269,12 @@ static void route_post_compile(SOCKET client, const HttpRequest *req)
         /* 加载新编译的 ELF */
         bool loaded = sim_load_elf(g_sim, COMPILE_OUTPUT);
 
+        /* 更新 ELF 路径，使得模型切换时能重新加载 */
+        if (loaded) {
+            strncpy(g_elf_path, COMPILE_OUTPUT, sizeof(g_elf_path) - 1);
+            g_elf_path[sizeof(g_elf_path) - 1] = '\0';
+        }
+
         uint32_t entry = g_sim->cpu.pc;
         uint32_t sp    = g_sim->cpu.regs[REG_SP];
 
@@ -1227,6 +1330,186 @@ static void route_post_compile(SOCKET client, const HttpRequest *req)
             "\"compile_output\":\"%s\"}",
             escaped_output);
         send_json(client, 400, resp);
+    }
+}
+
+/* GET /pipeline-state — 流水线寄存器状态 */
+static void route_get_pipeline_state(SOCKET client)
+{
+    JsonBuf jb;
+    jb_init(&jb);
+
+    sim_lock(g_sim);
+    PipelineState *p = &g_sim->pipe;
+
+    jb_printf(&jb,
+        "{\"stall_cycles\":%" PRIu64 ",\"flush_cycles\":%" PRIu64 ",",
+        p->stall_cycles, p->flush_cycles);
+
+    /* IF 阶段 */
+    jb_append(&jb, "\"if_id\":{");
+    jb_printf(&jb, "\"valid\":%s,\"pc\":%u,\"instr\":%u",
+              p->if_id.valid ? "true" : "false", p->if_id.pc, p->if_id.instr);
+    if (p->if_id.valid) {
+        char disasm[128];
+        cpu_disasm(p->if_id.instr, p->if_id.pc, disasm, sizeof(disasm));
+        jb_append(&jb, ",\"disasm\":");
+        jb_append_escaped(&jb, disasm);
+    }
+    jb_append(&jb, "},");
+
+    /* ID 阶段 */
+    jb_append(&jb, "\"id_ex\":{");
+    jb_printf(&jb, "\"valid\":%s,\"pc\":%u,\"opcode\":%u,\"rd\":%u,"
+              "\"rs1\":%u,\"rs2\":%u,\"funct3\":%u,\"funct7\":%u,"
+              "\"imm\":%d,\"rs1_val\":%u,\"rs2_val\":%u",
+              p->id_ex.valid ? "true" : "false", p->id_ex.pc,
+              p->id_ex.d.opcode, p->id_ex.d.rd, p->id_ex.d.rs1,
+              p->id_ex.d.rs2, p->id_ex.d.funct3, p->id_ex.d.funct7,
+              p->id_ex.d.imm, p->id_ex.rs1_val, p->id_ex.rs2_val);
+    if (p->id_ex.valid) {
+        char disasm[128];
+        cpu_disasm(p->id_ex.instr, p->id_ex.pc, disasm, sizeof(disasm));
+        jb_append(&jb, ",\"disasm\":");
+        jb_append_escaped(&jb, disasm);
+    }
+    jb_append(&jb, "},");
+
+    /* EX 阶段 */
+    jb_append(&jb, "\"ex_mem\":{");
+    jb_printf(&jb, "\"valid\":%s,\"pc\":%u,\"alu_result\":%u,"
+              "\"rs2_val\":%u,\"rd\":%u,\"opcode\":%u,\"funct3\":%u,"
+              "\"reg_write\":%s,\"mem_read\":%s,\"mem_write\":%s",
+              p->ex_mem.valid ? "true" : "false", p->ex_mem.pc,
+              p->ex_mem.alu_result, p->ex_mem.rs2_val,
+              p->ex_mem.rd, p->ex_mem.opcode, p->ex_mem.funct3,
+              p->ex_mem.reg_write ? "true" : "false",
+              p->ex_mem.mem_read ? "true" : "false",
+              p->ex_mem.mem_write ? "true" : "false");
+    if (p->ex_mem.valid) {
+        char disasm[128];
+        cpu_disasm(p->ex_mem.instr, p->ex_mem.pc, disasm, sizeof(disasm));
+        jb_append(&jb, ",\"disasm\":");
+        jb_append_escaped(&jb, disasm);
+    }
+    jb_append(&jb, "},");
+
+    /* MEM 阶段 */
+    jb_append(&jb, "\"mem_wb\":{");
+    jb_printf(&jb, "\"valid\":%s,\"pc\":%u,\"alu_result\":%u,"
+              "\"mem_data\":%u,\"rd\":%u,\"opcode\":%u,"
+              "\"reg_write\":%s,\"is_load\":%s",
+              p->mem_wb.valid ? "true" : "false", p->mem_wb.pc,
+              p->mem_wb.alu_result, p->mem_wb.mem_data,
+              p->mem_wb.rd, p->mem_wb.opcode,
+              p->mem_wb.reg_write ? "true" : "false",
+              p->mem_wb.is_load ? "true" : "false");
+    if (p->mem_wb.valid) {
+        char disasm[128];
+        cpu_disasm(p->mem_wb.instr, p->mem_wb.pc, disasm, sizeof(disasm));
+        jb_append(&jb, ",\"disasm\":");
+        jb_append_escaped(&jb, disasm);
+    }
+    jb_append(&jb, "}}");
+    sim_unlock(g_sim);
+
+    send_json(client, 200, jb.buf);
+    jb_free(&jb);
+}
+
+/* GET /cpu-model — 返回当前 CPU 模型 */
+static void route_get_cpu_model(SOCKET client)
+{
+    sim_lock(g_sim);
+    int model = (int)g_sim->cpu_model;
+    const char *name = (model == 0) ? "single" :
+                       (model == 1) ? "multi" : "pipeline";
+    char json[128];
+    snprintf(json, sizeof(json),
+             "{\"model\":%d,\"name\":\"%s\"}", model, name);
+    sim_unlock(g_sim);
+
+    send_json(client, 200, json);
+}
+
+/* POST /cpu-model — 切换 CPU 模型 */
+static void route_post_cpu_model(SOCKET client, const HttpRequest *req)
+{
+    /* 解析 model 字段 */
+    const char *model_str = NULL;
+    const char *key = strstr(req->body, "\"model\"");
+    if (key) {
+        key = strchr(key, ':');
+        if (key) {
+            key++;
+            while (*key && (*key == ' ' || *key == '\t' || *key == '\n'))
+                key++;
+            if (*key == '"') {
+                key++;
+                static char buf[32];
+                int i = 0;
+                while (*key && *key != '"' && i < 31) buf[i++] = *key++;
+                buf[i] = '\0';
+                model_str = buf;
+            } else if (*key >= '0' && *key <= '9') {
+                static char buf2[32];
+                int i = 0;
+                while (*key && *key != ',' && *key != '}' && i < 31) buf2[i++] = *key++;
+                buf2[i] = '\0';
+                model_str = buf2;
+            }
+        }
+    }
+
+    if (!model_str) {
+        send_json(client, 400,
+            "{\"status\":\"error\",\"message\":\"Missing 'model' field\"}");
+        return;
+    }
+
+    CpuModel new_model;
+    if (strcmp(model_str, "single") == 0 || strcmp(model_str, "0") == 0)
+        new_model = MODEL_SINGLE_CYCLE;
+    else if (strcmp(model_str, "multi") == 0 || strcmp(model_str, "1") == 0)
+        new_model = MODEL_MULTI_CYCLE;
+    else if (strcmp(model_str, "pipeline") == 0 || strcmp(model_str, "2") == 0)
+        new_model = MODEL_PIPELINE;
+    else {
+        char err[128];
+        snprintf(err, sizeof(err),
+            "{\"status\":\"error\",\"message\":\"Unknown model '%s'\"}", model_str);
+        send_json(client, 400, err);
+        return;
+    }
+
+    sim_lock(g_sim);
+    g_sim->cpu_model = new_model;
+
+    /* 重新加载 ELF */
+    bool loaded = false;
+    uint32_t entry = 0;
+    if (g_elf_path[0]) {
+        sim_reload(g_sim);
+        loaded = sim_load_elf(g_sim, g_elf_path);
+        entry = g_sim->cpu.pc;
+    }
+    sim_unlock(g_sim);
+
+    const char *name = (new_model == MODEL_SINGLE_CYCLE) ? "single" :
+                       (new_model == MODEL_MULTI_CYCLE) ? "multi" : "pipeline";
+    if (loaded) {
+        char resp[256];
+        snprintf(resp, sizeof(resp),
+            "{\"status\":\"ok\",\"model\":%d,\"name\":\"%s\",\"entry\":%u}",
+            (int)new_model, name, entry);
+        send_json(client, 200, resp);
+    } else {
+        char resp[200];
+        snprintf(resp, sizeof(resp),
+            "{\"status\":\"ok\",\"model\":%d,\"name\":\"%s\",\"entry\":0,"
+            "\"warning\":\"Model changed but no ELF reloaded\"}",
+            (int)new_model, name);
+        send_json(client, 200, resp);
     }
 }
 
@@ -1351,6 +1634,7 @@ static void send_response(SOCKET client, int code, const char *content_type,
     int header_len = snprintf(header, sizeof(header),
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
+        "Cache-Control: no-store, no-cache, must-revalidate\r\n"
         "Access-Control-Allow-Origin: *\r\n"
         "Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"
         "Access-Control-Allow-Headers: Content-Type\r\n"
@@ -1420,8 +1704,12 @@ static void dispatch(SOCKET client, const HttpRequest *req)
     else if (strcmp(req->path, "/disassembly") == 0 && strcmp(req->method, "GET") == 0) {
         route_get_disassembly(client, req);
     }
+    else if (strcmp(req->path, "/datapath.svg") == 0 && strcmp(req->method, "GET") == 0) {
+        route_get_datapath_svg(client);
+    }
+    /* 保留旧路径兼容 */
     else if (strcmp(req->path, "/pipeline.svg") == 0 && strcmp(req->method, "GET") == 0) {
-        route_get_pipeline_svg(client);
+        route_get_datapath_svg(client);
     }
     else if (strcmp(req->path, "/step") == 0 && strcmp(req->method, "POST") == 0) {
         route_post_step(client);
@@ -1437,6 +1725,15 @@ static void dispatch(SOCKET client, const HttpRequest *req)
     }
     else if (strcmp(req->path, "/compile") == 0 && strcmp(req->method, "POST") == 0) {
         route_post_compile(client, req);
+    }
+    else if (strcmp(req->path, "/pipeline-state") == 0 && strcmp(req->method, "GET") == 0) {
+        route_get_pipeline_state(client);
+    }
+    else if (strcmp(req->path, "/cpu-model") == 0 && strcmp(req->method, "GET") == 0) {
+        route_get_cpu_model(client);
+    }
+    else if (strcmp(req->path, "/cpu-model") == 0 && strcmp(req->method, "POST") == 0) {
+        route_post_cpu_model(client, req);
     }
     else {
         send_json(client, 404, "{\"status\":\"error\",\"message\":\"Not found\"}");
@@ -1498,11 +1795,15 @@ static void handle_request(SOCKET client)
  * 公共服务端入口
  * ================================================================ */
 
-int web_server_start(struct Simulator *sim, int port)
+int web_server_start(struct Simulator *sim, int port, const char *elf_path)
 {
     g_sim         = sim;
     g_server_port = port;
     g_server_running = true;
+    if (elf_path) {
+        strncpy(g_elf_path, elf_path, sizeof(g_elf_path) - 1);
+        g_elf_path[sizeof(g_elf_path) - 1] = '\0';
+    }
 
     /* ① 初始化 WinSock */
     WSADATA wsa;

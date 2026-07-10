@@ -82,6 +82,14 @@ typedef struct {
     bool     reg_write;     /* 写寄存器？ */
     char     disasm[64];    /* 反汇编 */
     bool     valid;         /* 数据有效（执行后置 true） */
+
+    /* 多周期 / 流水线 扩展字段 */
+    char     fsm_state[8];  /* 多周期：当前 FSM 状态名 (IF/ID/EX/MEM/WB) */
+    bool     stall;          /* 流水线：当前周期是否停顿 */
+    bool     flush;          /* 流水线：当前周期是否冲刷 */
+    bool     fwd_a;          /* 流水线：rs1 转发激活 */
+    bool     fwd_b;          /* 流水线：rs2 转发激活 */
+    uint8_t  pipe_valid_mask;/* 流水线：位0-3 = IF_ID/ID_EX/EX_MEM/MEM_WB valid */
 } DatapathState;
 
 /* ── 多周期控制器状态 ────────────────────────────────────────────
@@ -102,6 +110,8 @@ typedef struct {
     uint32_t mdr;           // 内存数据寄存器（Load 结果）
     uint32_t next_pc;       // 下一条指令的 PC
     uint32_t temp_pc;       // ID 阶段预计算的跳转目标
+    DecodedInstr ir_decoded; /* ID 阶段缓存的解码结果（跨状态复用） */
+    char     fsm_name[8];    /* 当前 FSM 状态名：IF/ID/EX/MEM/WB */
 } MultiCycleState;
 
 /* ── 流水线寄存器（Patterson & Hennessy §4.7-4.8）─────────────────
@@ -118,6 +128,7 @@ typedef struct {
 
 typedef struct {
     uint32_t     pc;
+    uint32_t     instr;    /* 原始 32 位指令字（透传给 EX 阶段） */
     DecodedInstr d;       /* 译码结果 */
     uint32_t     rs1_val; /* 源寄存器 1 的值 */
     uint32_t     rs2_val; /* 源寄存器 2 的值 */
@@ -126,8 +137,11 @@ typedef struct {
 
 typedef struct {
     uint32_t pc;
+    uint32_t instr;         /* 原始 32 位指令字（用于反汇编） */
+    DecodedInstr d;         /* 译码结果（透传给后续阶段） */
     uint32_t alu_result;    /* ALU 计算结果 / 有效地址 */
-    uint32_t rs2_val;       /* Store 数据（转发后） */
+    uint32_t rs1_val;       /* 源寄存器 1 的值（转发前快照，用于 DatapathState） */
+    uint32_t rs2_val;       /* Store 数据 / 源寄存器 2 的值（转发后） */
     uint8_t  rd;            /* 目标寄存器 */
     uint8_t  opcode;
     uint8_t  funct3;
@@ -139,11 +153,14 @@ typedef struct {
 } PipeEXMEM;
 
 typedef struct {
+    uint32_t pc;            /* 指令地址（用于 DatapathState 填充） */
+    uint32_t instr;         /* 原始 32 位指令字（用于反汇编） */
     uint32_t alu_result;    /* ALU 结果直通（非 Load） */
     uint32_t mem_data;      /* Load 数据（mem_read=true 时有效） */
     uint8_t  rd;
     uint8_t  opcode;
     uint8_t  funct3;
+    uint8_t  funct7;        /* 透传以区分 ALU 操作（ADD vs SUB 等） */
     bool     reg_write;     /* 写整数寄存器？ */
     bool     is_load;       /* 来自 Load？WB 阶段选 mem_data 而非 alu_result */
     bool     is_fp_load;    /* 浮点 Load？WB 阶段写 fregs 而非 regs */
@@ -158,6 +175,8 @@ typedef struct {
     PipeMEMWB  mem_wb;
     uint64_t   stall_cycles;    /* Load-use 停顿周期数 */
     uint64_t   flush_cycles;    /* 分支/跳转冲刷周期数 */
+
+    DatapathState last_wb_dp;   /* WB 阶段完成指令的数据通路快照 */
 } PipelineState;
 
 /* ── 模拟器顶层结构体 ──────────────────────────────────────────── */

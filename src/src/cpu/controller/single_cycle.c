@@ -200,5 +200,8 @@ void sim_step_single(Simulator *sim)
         break;
     }
 
+    /* 填充 FSM 状态（单周期：一条指令一周期完成，固定为 "IF"） */
+    strncpy(dp->fsm_state, "IF", sizeof(dp->fsm_state) - 1);
+
     dp->valid = true;
 }

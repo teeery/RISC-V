@@ -58,6 +58,14 @@ static void pt_mgr_add(MMUState *mmu, uint32_t ppn, uint32_t *l2_ptr)
                                                   sizeof(uint32_t));
         mmu->pt_mgr.tables = (uint32_t **)calloc((size_t)PT_MGR_INIT_CAP,
                                                   sizeof(uint32_t *));
+        if (!mmu->pt_mgr.ppns || !mmu->pt_mgr.tables) {
+            free(mmu->pt_mgr.ppns);
+            free(mmu->pt_mgr.tables);
+            mmu->pt_mgr.ppns   = NULL;
+            mmu->pt_mgr.tables = NULL;
+            mmu->pt_mgr.capacity = 0;
+            return;  /* OOM: 注册失败，调用方应检查 */
+        }
         mmu->pt_mgr.count = 0;
         cap = PT_MGR_INIT_CAP;
     }
@@ -65,10 +73,17 @@ static void pt_mgr_add(MMUState *mmu, uint32_t ppn, uint32_t *l2_ptr)
     /* 动态扩容 */
     if (n >= cap) {
         int new_cap = cap * 2;
-        mmu->pt_mgr.ppns   = (uint32_t *)realloc(mmu->pt_mgr.ppns,
+        uint32_t *new_ppns = (uint32_t *)realloc(mmu->pt_mgr.ppns,
                                                    (size_t)new_cap * sizeof(uint32_t));
-        mmu->pt_mgr.tables = (uint32_t **)realloc(mmu->pt_mgr.tables,
-                                                    (size_t)new_cap * sizeof(uint32_t *));
+        uint32_t **new_tables = (uint32_t **)realloc(mmu->pt_mgr.tables,
+                                                      (size_t)new_cap * sizeof(uint32_t *));
+        if (!new_ppns || !new_tables) {
+            free(new_ppns);  /* OK if NULL */
+            free(new_tables);
+            return;  /* OOM: 扩容失败，保持原状态 */
+        }
+        mmu->pt_mgr.ppns    = new_ppns;
+        mmu->pt_mgr.tables  = new_tables;
         mmu->pt_mgr.capacity = new_cap;
     }
 
@@ -113,6 +128,10 @@ void mmu_init(MMUState *mmu)
     mmu->satp    = 0;
     mmu->enabled = false;
     mmu->root_page_table = (uint32_t *)calloc(PT_ENTRIES, sizeof(uint32_t));
+    if (!mmu->root_page_table) {
+        fprintf(stderr, "Fatal: Failed to allocate root page table\n");
+        exit(1);
+    }
 }
 
 void mmu_destroy(MMUState *mmu)
@@ -346,9 +365,10 @@ bool mmu_map_page(MMUState *mmu, uint32_t vaddr, uint32_t paddr,
     /* MEM_* → PTE_* 转换 */
     uint8_t pte_flags = mem_perm_to_pte_flags(flags);
 
-    /* 确保根页表存在 */
+    /* 确保根页表存在（mmu_map_page 可能在 mmu_init 之前被调用） */
     if (!mmu->root_page_table) {
         mmu->root_page_table = (uint32_t *)calloc(PT_ENTRIES, sizeof(uint32_t));
+        if (!mmu->root_page_table) return false;
     }
 
     /* 第一级 PDE：检查是否需要分配第二级页表 */

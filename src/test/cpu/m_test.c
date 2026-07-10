@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
  * m_test.c — M 扩展（乘除法 8 条指令）单元测试
  *
  * 用法：
@@ -303,22 +303,6 @@ void test_remu(void)
     free(sim);
 }
 
-/* ── 桩函数：M 测试不依赖但链接必须的符号 ─────────────────────────── */
-bool exec_load_fp(Simulator *s, DecodedInstr *dec, uint32_t *np)
-{ (void)s; (void)dec; (void)np; return false; }
-bool exec_store_fp(Simulator *s, DecodedInstr *dec, uint32_t *np)
-{ (void)s; (void)dec; (void)np; return false; }
-bool exec_fp_op(Simulator *s, DecodedInstr *dec, uint32_t *np)
-{ (void)s; (void)dec; (void)np; return false; }
-bool exec_fma(Simulator *s, DecodedInstr *dec, uint32_t *np)
-{ (void)s; (void)dec; (void)np; return false; }
-bool elf_load(const char *fn, PhysicalMemory *pm, MMUState *mmu,
-              uint32_t *entry, uint32_t *sp)
-{ (void)fn; (void)pm; (void)mmu; (void)entry; (void)sp; return true; }
-
-/* ================================================================
- * main
- * ================================================================ */
 int main(void)
 {
     printf("═══════════════════════════════════════\n");
