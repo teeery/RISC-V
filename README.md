@@ -161,7 +161,7 @@ risc-v/
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | [v0.1.0](https://github.com/teeery/risc-v/releases/tag/v0.1.0) | 2026-07-02 | 首个可运行版本：完整 RV32I 指令执行、ELF 加载器、CPU 单元测试 |
-| v0.2.0 | 2026-07-11 | **三级 CPU 控制器 + Web 调试器可视化**：新增多周期/流水线控制器（Forwarding/Stall/Flush）；Web 调试器数据通路 SVG 实时可视化；在线 C 编译；M/F 扩展完整实现（76 条指令）；修复单周期/多周期 Step 不执行、流水线 Step 前 4 周期不可见、断点恢复顺序错误 |
+| [v0.2.0](https://github.com/teeery/RISC-V/releases/tag/v0.2.0) | 2026-07-11 | **三级 CPU 控制器 + Web 调试器可视化**：新增多周期/流水线控制器（Forwarding/Stall/Flush）；Web 调试器数据通路 SVG 实时可视化；在线 C 编译；M/F 扩展完整实现（76 条指令）；修复单周期/多周期 Step 不执行、流水线 Step 前 4 周期不可见、断点恢复顺序错误 |
 
 ## 参考资料
 
