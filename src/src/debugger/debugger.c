@@ -225,14 +225,15 @@ void debugger_step(struct Simulator *sim)
         sim->single_step = true;
     }
 
-    /* 多周期/流水线需要多次 sim_step 才能完成 1 条指令。
-     * single_step=true 在 sim_step 内部不影响控制器，
-     * 只在 sim_run() 中被检查，所以这里安全。 */
-    uint64_t instr_before = sim->instr_count;
+    /* 多周期：持续推进直到一条指令完整执行（instr_count 增加）。
+     * 单周期/流水线：1 次 sim_step = 1 指令/1 周期，无需额外循环。
+     * 流水线保留逐周期推进，方便在 Web 端观察五级流水线逐拍变化。 */
     sim_step(sim);
-    /* 持续推进直到一条指令退休（instr_count 增加）或 CPU 停止 */
-    while (sim->cpu.running && sim->instr_count == instr_before) {
-        sim_step(sim);
+    if (sim->cpu_model == MODEL_MULTI_CYCLE) {
+        uint64_t instr_before = sim->instr_count;
+        while (sim->cpu.running && sim->instr_count == instr_before) {
+            sim_step(sim);
+        }
     }
 
     if (at_bp) {
@@ -263,11 +264,13 @@ void debugger_continue(struct Simulator *sim)
 
     if (at_bp) {
         ExceptionType exc = EXC_NONE;
-        /* 推进直到断点处的指令完整执行（多周期/流水线需多步） */
-        uint64_t instr_before_bp = sim->instr_count;
         sim_step(sim);
-        while (sim->cpu.running && sim->instr_count == instr_before_bp) {
-            sim_step(sim);
+        /* 多周期：持续推进直到断点处指令完整执行 */
+        if (sim->cpu_model == MODEL_MULTI_CYCLE) {
+            uint64_t instr_before_bp = sim->instr_count;
+            while (sim->cpu.running && sim->instr_count == instr_before_bp) {
+                sim_step(sim);
+            }
         }
         mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
                      EBREAK_INSTR, sim->cpu.priv, &exc);
