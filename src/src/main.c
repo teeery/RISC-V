@@ -11,11 +11,11 @@
  * main.c — RISC-V 模拟器入口点
  *
  * 用法:
- *   ./riscv-sim <elf_file>        直接运行
- *   ./riscv-sim -s <elf_file>     调试模式（进入 Debugger REPL）
- *   ./riscv-sim -t <elf_file>     指令跟踪模式
- *   ./riscv-sim -t -s <elf_file>  调试 + 跟踪
- *   ./riscv-sim -w <port> <elf>   Web 调试器模式
+ *   ./riscv-sim                      无参数双击：自动启动 Web 调试器 + 打开浏览器
+ *   ./riscv-sim <elf_file>           直接运行
+ *   ./riscv-sim -s <elf_file>        调试模式（进入 Debugger REPL）
+ *   ./riscv-sim -t <elf_file>        指令跟踪模式
+ *   ./riscv-sim -w <port> <elf>      Web 调试器模式
  * ================================================================
  */
 
@@ -28,7 +28,8 @@ static void print_usage(const char *prog)
     printf("  -t          Instruction trace mode\n");
     printf("  -w <port>   Web debugger mode (HTTP server on given port)\n");
     printf("  -h          Show this help\n");
-    printf("\nIf no ELF file is specified, a built-in demo program is loaded.\n");
+    printf("\nWithout any arguments, starts Web debugger on port 8080\n");
+    printf("with built-in demo program and opens browser.\n");
 }
 
 static CpuModel parse_cpu_model(const char *s)
@@ -112,6 +113,12 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* 无任何参数时（双击 exe）：自动启动 Web 调试器 */
+    if (argc == 1) {
+        web_mode = true;
+        web_port = 8080;
+    }
+
     if (trace_mode) {
         printf("Trace mode enabled (not yet implemented)\n");
     }
@@ -120,6 +127,12 @@ int main(int argc, char *argv[])
     if (web_mode) {
         /* Web 调试器模式：阻塞直到服务器退出 */
         printf("Starting web debugger on port %d...\n", web_port);
+        printf("Open http://localhost:%d in your browser.\n", web_port);
+        {
+            char url[64];
+            snprintf(url, sizeof(url), "start http://localhost:%d", web_port);
+            system(url);
+        }
         int ret = web_server_start(&sim, web_port, elf_path);
         if (ret != EXIT_SUCCESS) {
             sim_destroy(&sim);
