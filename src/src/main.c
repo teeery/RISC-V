@@ -1,6 +1,7 @@
 #include "simulator.h"
 #include "debugger/debugger.h"
 #include "debugger/web_server.h"
+#include "default_elf.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -20,13 +21,14 @@
 
 static void print_usage(const char *prog)
 {
-    printf("Usage: %s [options] <elf_file>\n", prog);
+    printf("Usage: %s [options] [elf_file]\n", prog);
     printf("Options:\n");
     printf("  -m <model>  CPU model: single (default), multi, pipeline\n");
     printf("  -s          Debug mode (enter interactive debugger)\n");
     printf("  -t          Instruction trace mode\n");
     printf("  -w <port>   Web debugger mode (HTTP server on given port)\n");
     printf("  -h          Show this help\n");
+    printf("\nIf no ELF file is specified, a built-in demo program is loaded.\n");
 }
 
 static CpuModel parse_cpu_model(const char *s)
@@ -84,9 +86,18 @@ int main(int argc, char *argv[])
     }
 
     if (!elf_path) {
-        fprintf(stderr, "Error: No ELF file specified\n");
-        print_usage(argv[0]);
-        return 1;
+        /* 未指定 ELF 文件：使用内置 demo 程序 */
+        const char *default_elf = "builtin_hello.elf";
+        FILE *fp = fopen(default_elf, "wb");
+        if (fp) {
+            fwrite(DEFAULT_ELF_DATA, 1, DEFAULT_ELF_SIZE, fp);
+            fclose(fp);
+            elf_path = default_elf;
+            printf("No ELF specified, using built-in demo program.\n");
+        } else {
+            fprintf(stderr, "Error: Failed to write built-in ELF\n");
+            return 1;
+        }
     }
 
     /* 初始化模拟器 */
