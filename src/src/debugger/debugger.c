@@ -225,7 +225,16 @@ void debugger_step(struct Simulator *sim)
         sim->single_step = true;
     }
 
+    /* 多周期：持续推进直到一条指令完整执行（instr_count 增加）。
+     * 单周期/流水线：1 次 sim_step = 1 指令/1 周期，无需额外循环。
+     * 流水线保留逐周期推进，方便在 Web 端观察五级流水线逐拍变化。 */
     sim_step(sim);
+    if (sim->cpu_model == MODEL_MULTI_CYCLE) {
+        uint64_t instr_before = sim->instr_count;
+        while (sim->cpu.running && sim->instr_count == instr_before) {
+            sim_step(sim);
+        }
+    }
 
     if (at_bp) {
         ExceptionType exc = EXC_NONE;
@@ -256,12 +265,20 @@ void debugger_continue(struct Simulator *sim)
     if (at_bp) {
         ExceptionType exc = EXC_NONE;
         sim_step(sim);
+        /* 多周期：持续推进直到断点处指令完整执行 */
+        if (sim->cpu_model == MODEL_MULTI_CYCLE) {
+            uint64_t instr_before_bp = sim->instr_count;
+            while (sim->cpu.running && sim->instr_count == instr_before_bp) {
+                sim_step(sim);
+            }
+        }
         mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
                      EBREAK_INSTR, sim->cpu.priv, &exc);
     }
 
     printf("Continuing...\n");
     sim->cpu.running = true;
+    sim->single_step = false;
     while (sim->cpu.running) {
         sim_step(sim);
         if (sim->single_step) { sim->single_step = false; break; }
