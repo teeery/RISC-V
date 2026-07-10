@@ -2,14 +2,15 @@
 #define DEBUGGER_INTERNAL_H
 
 /* ================================================================
- * debugger_internal.h — debugger 模块内部函数声明
+ * debugger_internal.h — debugger 模块内部共享定义
  *
  * 仅在编译测试时（-DDEBUGGER_TEST）暴露 static 函数。
- * 正常编译时这些函数保持 static，不影响模块封装。
- *
- * 模式参考：src/src/loader/loader_internal.h
+ * EBREAK_INSTR 在此统一定义，避免 breakpoint.c 和 debugger.c 重复。
  * ================================================================
  */
+
+/* RISC-V ebreak 指令编码 */
+#define EBREAK_INSTR  0x00100073
 
 #ifdef DEBUGGER_TEST
 

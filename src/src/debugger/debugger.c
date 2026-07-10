@@ -19,13 +19,13 @@
  * debugger.c — 交互式调试器 REPL 实现
  *
  * 提示符: (rvsim)
- * 命令缩写: 前缀匹配 (b→break, c→continue, s→step, q→quit)
+ * 命令缩写: 全匹配或首字母 (b→break, c→continue, s→step, q→quit)
  * ================================================================
  */
 
 #define MAX_CMD_LEN  256
 #define MAX_ARGS     8
-#define EBREAK_INSTR  0x00100073
+/* EBREAK_INSTR 定义在 breakpoint.c:22，此处通过 debugger_internal.h 共享 */
 
 /* ── 寄存器 ABI 名称表 (x0-x31) ──────────────────────────────── */
 static const char *reg_abi_names[] = {
@@ -211,6 +211,85 @@ void debugger_step(struct Simulator *sim)
     bool at_bp = false;
     int bp_i = -1;
 
+    /* ── 流水线模式 ────────────────────────────────────────
+     *
+     * 断点恢复必须先于 sim_step：若 CPU 已停止且 mepc 命中某个
+     * 断点（说明上一次是因断点 trap 停下的），需要先恢复原始指令、
+     * 推进到该指令完成（WB）、再重新插入 ebreak，然后返回停止状态。
+     *
+     * 正常情况：每个 Step = 1 个时钟周期。
+     */
+    if (sim->cpu_model == MODEL_PIPELINE) {
+
+        /* ── ① 先检查是否停在断点处（恢复后再 step）───────── */
+        if (!sim->cpu.running) {
+            uint32_t trapped_pc = sim->cpu.mepc;
+            for (int i = 0; i < sim->bp_count; i++) {
+                if (sim->breakpoints[i].enabled &&
+                    sim->breakpoints[i].addr == trapped_pc) {
+                    bp_i = i;
+                    at_bp = true;
+                    break;
+                }
+            }
+            if (at_bp) {
+                /* 恢复原始指令 → 推进到指令完成 → 重新插入 ebreak */
+                ExceptionType exc = EXC_NONE;
+                mmu_write_32(&sim->mmu, &sim->pmem,
+                             sim->breakpoints[bp_i].addr,
+                             sim->breakpoints[bp_i].original_instr,
+                             sim->cpu.priv, &exc);
+                sim->cpu.running = true;
+                uint64_t instr_before = sim->instr_count;
+                int max_cycles = 100;
+                while (sim->cpu.running && sim->instr_count == instr_before
+                       && max_cycles-- > 0) {
+                    sim_step(sim);
+                }
+                if (max_cycles < 0) {
+                    fprintf(stderr, "Warning: breakpoint recovery exceeded cycle limit\n");
+                    sim->cpu.running = false;
+                }
+                mmu_write_32(&sim->mmu, &sim->pmem,
+                             sim->breakpoints[bp_i].addr,
+                             EBREAK_INSTR, sim->cpu.priv, &exc);
+                sim->cpu.running = false;
+            }
+        }
+
+        /* ── ② 正常推进 1 个时钟周期 ─────────────────────── */
+        if (!at_bp) {
+            if (!sim->cpu.running) {
+                sim->cpu.running = true;
+            }
+            sim_step(sim);
+        }
+
+        /* ── ③ 反汇编显示 ────────────────────────────────── */
+        {
+            ExceptionType exc2 = EXC_NONE;
+            uint32_t instr;
+            char disasm[128] = {0};
+            uint32_t show_pc = at_bp ? sim->breakpoints[bp_i].addr : pc_before;
+            if (mmu_read_32(&sim->mmu, &sim->pmem, show_pc, &instr,
+                            sim->cpu.priv, &exc2))
+                cpu_disasm(instr, show_pc, disasm, sizeof(disasm));
+            printf("0x%08x: %08x  %s [pipeline, 1 cycle]\n",
+                   show_pc, instr, disasm);
+        }
+        return;
+    }
+
+    /* ── 单周期 & 多周期模式 ────────────────────────────────
+     *
+     * 确保 CPU 在运行状态：sim_step() 入口检查 !cpu->running
+     * 时直接返回，因此各调用方必须预先设置 running=true。
+     */
+
+    if (!sim->cpu.running) {
+        sim->cpu.running = true;
+    }
+
     for (int i = 0; i < sim->bp_count; i++) {
         if (sim->breakpoints[i].enabled && sim->breakpoints[i].addr == sim->cpu.pc) {
             at_bp = true; bp_i = i; break;
@@ -218,28 +297,33 @@ void debugger_step(struct Simulator *sim)
     }
 
     if (at_bp) {
-        ExceptionType exc = EXC_NONE;
-        mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
-                     sim->breakpoints[bp_i].original_instr, sim->cpu.priv, &exc);
+        /* 多周期优化：仅在 MC_IF（新指令开始）恢复原始指令，
+         * 中间 FSM 状态保持原始指令在内存中（不会取指到该地址）。 */
+        bool is_mc_start = (sim->cpu_model == MODEL_MULTI_CYCLE)
+                           ? (sim->mc.state == 0 /* MC_IF */) : true;
+        if (is_mc_start || sim->cpu_model == MODEL_SINGLE_CYCLE) {
+            ExceptionType exc = EXC_NONE;
+            mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
+                         sim->breakpoints[bp_i].original_instr,
+                         sim->cpu.priv, &exc);
+        }
     } else {
         sim->single_step = true;
     }
 
-    /* 多周期：持续推进直到一条指令完整执行（instr_count 增加）。
-     * 单周期/流水线：1 次 sim_step = 1 指令/1 周期，无需额外循环。
-     * 流水线保留逐周期推进，方便在 Web 端观察五级流水线逐拍变化。 */
+    uint64_t instr_before = sim->instr_count;
     sim_step(sim);
-    if (sim->cpu_model == MODEL_MULTI_CYCLE) {
-        uint64_t instr_before = sim->instr_count;
-        while (sim->cpu.running && sim->instr_count == instr_before) {
-            sim_step(sim);
-        }
-    }
 
     if (at_bp) {
-        ExceptionType exc = EXC_NONE;
-        mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
-                     EBREAK_INSTR, sim->cpu.priv, &exc);
+        /* 多周期：仅在指令完成（instr_count 递增，状态回到 MC_IF）后重新插入 ebreak */
+        bool instr_done = (sim->cpu_model == MODEL_MULTI_CYCLE)
+                          ? (sim->instr_count > instr_before)
+                          : true;
+        if (instr_done) {
+            ExceptionType exc = EXC_NONE;
+            mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
+                         EBREAK_INSTR, sim->cpu.priv, &exc);
+        }
     }
 
     {
@@ -262,13 +346,43 @@ void debugger_continue(struct Simulator *sim)
         }
     }
 
-    if (at_bp) {
+    /* ── 流水线模式：特殊断点处理 ────────────────────────────
+     *
+     * 如果停在断点处（cpu.running=false, pipeline empty），
+     * 需要先恢复原始指令 + 推进到指令完成，再重新插入 ebreak。
+     */
+    if (at_bp && sim->cpu_model == MODEL_PIPELINE) {
         ExceptionType exc = EXC_NONE;
+        /* 恢复原始指令 */
+        mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
+                     sim->breakpoints[bp_i].original_instr,
+                     sim->cpu.priv, &exc);
+        /* 推进直到该指令完成（到达 WB），最多 100 周期 */
+        sim->cpu.running = true;
+        uint64_t instr_before = sim->instr_count;
+        int max_cycles_c = 100;
+        while (sim->cpu.running && sim->instr_count == instr_before
+               && max_cycles_c-- > 0) {
+            sim_step(sim);
+        }
+        /* 重新插入 ebreak */
+        mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
+                     EBREAK_INSTR, sim->cpu.priv, &exc);
+    } else if (at_bp) {
+        /* 单周期/多周期：恢复 → 执行整条指令 → 重新插入 */
+        ExceptionType exc = EXC_NONE;
+        mmu_write_32(&sim->mmu, &sim->pmem, sim->breakpoints[bp_i].addr,
+                     sim->breakpoints[bp_i].original_instr,
+                     sim->cpu.priv, &exc);
+        /* 确保 CPU 在运行状态（同 debugger_step 的修正） */
+        sim->cpu.running = true;
         sim_step(sim);
-        /* 多周期：持续推进直到断点处指令完整执行 */
+        /* 多周期：持续推进直到断点处指令完整执行，最多 100 周期 */
         if (sim->cpu_model == MODEL_MULTI_CYCLE) {
             uint64_t instr_before_bp = sim->instr_count;
-            while (sim->cpu.running && sim->instr_count == instr_before_bp) {
+            int max_cycles_mc = 100;
+            while (sim->cpu.running && sim->instr_count == instr_before_bp
+                   && max_cycles_mc-- > 0) {
                 sim_step(sim);
             }
         }
@@ -283,8 +397,12 @@ void debugger_continue(struct Simulator *sim)
         sim_step(sim);
         if (sim->single_step) { sim->single_step = false; break; }
     }
-    if (!sim->cpu.running)
-        printf("Hit breakpoint at 0x%08x\n", sim->cpu.pc);
+    if (!sim->cpu.running) {
+        /* 流水线模式下断点命中后 PC 被设为 mtvec，实际地址在 mepc */
+        uint32_t bp_addr = (sim->cpu_model == MODEL_PIPELINE)
+                           ? sim->cpu.mepc : sim->cpu.pc;
+        printf("Hit breakpoint at 0x%08x\n", bp_addr);
+    }
 }
 
 /* ================================================================

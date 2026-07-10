@@ -128,6 +128,9 @@ bool sim_load_elf(Simulator *sim, const char *path)
  * ─────────────────────────────────────────────────────────────── */
 void sim_step(Simulator *sim)
 {
+    /* CPU 已停止 → 不执行任何指令（各控制器不再自行检查） */
+    if (!sim->cpu.running) return;
+
     switch (sim->cpu_model) {
 
     case MODEL_SINGLE_CYCLE:
@@ -164,15 +167,20 @@ void sim_run(Simulator *sim)
         }
     }
 
-    /* 流水线排空：陷阱触发后，MEM/WB 中的指令仍需完成。
-     * 单周期和多周期在 running=false 时已无未完成工作，
-     * 此处只对流水线模式有影响（其他模式的流水线寄存器全无效）。 */
+    /* 流水线排空 + 多周期排空：
+     * 陷阱触发后，流水线中未完成指令仍需退休。
+     * 多周期中可能在 MC_EX/MC_MEM/MC_WB 状态停止，需完成当前指令。 */
     if (sim->cpu_model == MODEL_PIPELINE) {
         while (1) {
             bool empty = !sim->pipe.if_id.valid && !sim->pipe.id_ex.valid &&
                          !sim->pipe.ex_mem.valid && !sim->pipe.mem_wb.valid;
             if (empty) break;
             sim_step_pipeline(sim);
+        }
+    } else if (sim->cpu_model == MODEL_MULTI_CYCLE) {
+        /* 多周期：若没在 MC_IF（新指令开始），持续推进到指令完成 */
+        while (sim->mc.state != 0) {  /* 0 = MC_IF */
+            sim_step_multi(sim);
         }
     }
 

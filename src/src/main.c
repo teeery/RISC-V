@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 
 /* ================================================================
  * main.c — RISC-V 模拟器入口点
@@ -62,11 +63,13 @@ int main(int argc, char *argv[])
         } else if (strcmp(argv[i], "-w") == 0) {
             web_mode = true;
             if (i + 1 < argc && argv[i + 1][0] != '-') {
-                web_port = atoi(argv[++i]);
-                if (web_port <= 0 || web_port > 65535) {
+                char *endptr;
+                long val = strtol(argv[++i], &endptr, 10);
+                if (*endptr != '\0' || val <= 0 || val > 65535) {
                     fprintf(stderr, "Error: Invalid port number '%s'\n", argv[i]);
                     return 1;
                 }
+                web_port = (int)val;
             }
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
@@ -106,7 +109,7 @@ int main(int argc, char *argv[])
     if (web_mode) {
         /* Web 调试器模式：阻塞直到服务器退出 */
         printf("Starting web debugger on port %d...\n", web_port);
-        int ret = web_server_start(&sim, web_port);
+        int ret = web_server_start(&sim, web_port, elf_path);
         if (ret != EXIT_SUCCESS) {
             sim_destroy(&sim);
             return 1;

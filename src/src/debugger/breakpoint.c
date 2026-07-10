@@ -1,4 +1,5 @@
 #include "debugger/debugger.h"
+#include "debugger_internal.h"   /* EBREAK_INSTR */
 #include "simulator.h"       // Simulator, Breakpoint
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +20,9 @@
  * ================================================================
  */
 
-#define EBREAK_INSTR  0x00100073
+/* EBREAK_INSTR 定义在 debugger_internal.h 中，debugger.c 和 breakpoint.c 共享。 */
+
+
 
 int debugger_add_breakpoint(struct Simulator *sim, uint32_t addr)
 {

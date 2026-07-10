@@ -90,11 +90,7 @@
  *   → 使用方式：reg_names[rd] 就得到目标寄存器的 ABI 名
  */
 
-// TODO: 定义指令名查找表结构体
-// 提示：包含 opcode, funct3, funct7（用 -1 表示不关心）, 指令名
-// 大概有 40 条左右的条目
-
-//指令表的结构体（定义"列"）
+// 指令表的结构体（定义"列"）
 typedef struct {
     uint8_t opcode;   // 操作码（低 7 位）
     int8_t  funct3;   // 功能码 3（3 位，细分指令），-1 表示不关心
@@ -380,13 +376,10 @@ DecodedInstr cpu_decode(uint32_t instr)
 
 void cpu_disasm(uint32_t instr, uint32_t pc, char *buf, size_t bufsz)
 {
-    // TODO: Step 1 — 调 cpu_decode(instr)
     DecodedInstr d = cpu_decode(instr);
 
-    // TODO: Step 2 — 在指令名表中查找匹配的条目
-    //   提示：写一个循环遍历指令表，优先精确匹配 funct7，
-    //   其次匹配 funct7==-1 的通配条目
-    const char *name = "unknown"; // 默认指令名
+    /* 在指令名表中查找匹配项：精确匹配 funct7 优先（-1 为通配） */
+    const char *name = "unknown";
     int table_size = (int)(sizeof(instr_table) / sizeof(instr_table[0]));
     for (int i = 0; i < table_size; i++) {
         if (instr_table[i].opcode == d.opcode &&
