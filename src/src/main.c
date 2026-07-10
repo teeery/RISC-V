@@ -1,6 +1,7 @@
 #include "simulator.h"
 #include "debugger/debugger.h"
 #include "debugger/web_server.h"
+#include "default_elf.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -10,23 +11,25 @@
  * main.c — RISC-V 模拟器入口点
  *
  * 用法:
- *   ./riscv-sim <elf_file>        直接运行
- *   ./riscv-sim -s <elf_file>     调试模式（进入 Debugger REPL）
- *   ./riscv-sim -t <elf_file>     指令跟踪模式
- *   ./riscv-sim -t -s <elf_file>  调试 + 跟踪
- *   ./riscv-sim -w <port> <elf>   Web 调试器模式
+ *   ./riscv-sim                      无参数双击：自动启动 Web 调试器 + 打开浏览器
+ *   ./riscv-sim <elf_file>           直接运行
+ *   ./riscv-sim -s <elf_file>        调试模式（进入 Debugger REPL）
+ *   ./riscv-sim -t <elf_file>        指令跟踪模式
+ *   ./riscv-sim -w <port> <elf>      Web 调试器模式
  * ================================================================
  */
 
 static void print_usage(const char *prog)
 {
-    printf("Usage: %s [options] <elf_file>\n", prog);
+    printf("Usage: %s [options] [elf_file]\n", prog);
     printf("Options:\n");
     printf("  -m <model>  CPU model: single (default), multi, pipeline\n");
     printf("  -s          Debug mode (enter interactive debugger)\n");
     printf("  -t          Instruction trace mode\n");
     printf("  -w <port>   Web debugger mode (HTTP server on given port)\n");
     printf("  -h          Show this help\n");
+    printf("\nWithout any arguments, starts Web debugger on port 8080\n");
+    printf("with built-in demo program and opens browser.\n");
 }
 
 static CpuModel parse_cpu_model(const char *s)
@@ -84,9 +87,18 @@ int main(int argc, char *argv[])
     }
 
     if (!elf_path) {
-        fprintf(stderr, "Error: No ELF file specified\n");
-        print_usage(argv[0]);
-        return 1;
+        /* 未指定 ELF 文件：使用内置 demo 程序 */
+        const char *default_elf = "builtin_hello.elf";
+        FILE *fp = fopen(default_elf, "wb");
+        if (fp) {
+            fwrite(DEFAULT_ELF_DATA, 1, DEFAULT_ELF_SIZE, fp);
+            fclose(fp);
+            elf_path = default_elf;
+            printf("No ELF specified, using built-in demo program.\n");
+        } else {
+            fprintf(stderr, "Error: Failed to write built-in ELF\n");
+            return 1;
+        }
     }
 
     /* 初始化模拟器 */
@@ -101,6 +113,12 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* 无任何参数时（双击 exe）：自动启动 Web 调试器 */
+    if (argc == 1) {
+        web_mode = true;
+        web_port = 8080;
+    }
+
     if (trace_mode) {
         printf("Trace mode enabled (not yet implemented)\n");
     }
@@ -109,6 +127,12 @@ int main(int argc, char *argv[])
     if (web_mode) {
         /* Web 调试器模式：阻塞直到服务器退出 */
         printf("Starting web debugger on port %d...\n", web_port);
+        printf("Open http://localhost:%d in your browser.\n", web_port);
+        {
+            char url[64];
+            snprintf(url, sizeof(url), "start http://localhost:%d", web_port);
+            system(url);
+        }
         int ret = web_server_start(&sim, web_port, elf_path);
         if (ret != EXIT_SUCCESS) {
             sim_destroy(&sim);
